@@ -6,9 +6,11 @@ import numpy as np
 from icecream import ic
 from data import data_gen, car_val
 import matplotlib.pyplot as plt
+import alphashape
+import geopandas as gpd
 
 N_SEQ = 1_000
-EPOCHS = 100_000
+EPOCHS = 2_00
 N_SAMPLES = 1_000
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -126,18 +128,60 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
 def main():
     ic(DEVICE)
     data = data_gen(N_SEQ)
+    # plt.show()
     dataset = TensorDataset(torch.Tensor(data))
     loader = DataLoader(dataset, batch_size=50, shuffle=True)
     trained_model = train(loader, EPOCHS)
+    torch.save(trained_model.state_dict(), "model.pt")
+
     samples = sample(trained_model, N_SAMPLES).detach().cpu().numpy()
     pred = samples[:, :3]
     actions = samples[:, 3:]
+    max_actions = np.max(actions, axis=0)
+    min_actions = np.min(actions, axis=0)
+    for n_action in range(len(max_actions)):
+        action_min = min_actions[n_action]
+        action_max = max_actions[n_action]
+        ic(n_action, action_min, action_max)
+
     val = car_val(pred, actions)
-    torch.save(trained_model.state_dict(), "model.pt")
+
+    max_error = np.max(val["error"])
+    min_error = np.min(val["error"])
+
+    error_sel = val["error"] >= val["mse"]
+
     ic(val["mse"])
-    plt.scatter(val["states"][:, 0], val["states"][:, 1], label="states")
-    plt.scatter(pred[:, 0], pred[:, 1], label="prediction", alpha=0.5)
-    plt.legend()
+    ic(max_error, min_error)
+
+    xy_states = val["states"][:, :2][error_sel]
+    xy_pred = pred[:, :2][error_sel]
+    # plt.figure()
+    xy_states_poly = val["states"][:, :2]
+    shape = alphashape.alphashape(xy_states_poly, 0.0)
+    g = gpd.GeoSeries(shape)
+    g.plot(alpha=0.2)
+    plt.scatter(data[:, 0], data[:, 1], label="training")
+    # plt.figure()
+    # plt.hist(val["error"])
+
+    # plt.figure()
+
+    # plt.quiver(
+    #     xy_states[:, 0],
+    #     xy_states[:, 1],
+    #     xy_pred[:, 0] - xy_states[:, 0],
+    #     xy_pred[:, 1] - xy_states[:, 1],
+    #     label="error",
+    # )
+    # plt.scatter(xy_states[:, 0], xy_states[:, 1], label="states")
+    # plt.scatter(xy_pred[:, 0], xy_pred[:, 1], label="prediction", alpha=0.5)
+    # plt.legend()
+    # plt.figure()
+    # plt.scatter(actions[:, 0], val["error"])
+    # plt.figure()
+    # plt.scatter(actions[:, 1], val["error"])
+
     plt.show()
 
 
