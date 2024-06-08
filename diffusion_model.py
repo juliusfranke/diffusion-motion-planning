@@ -7,10 +7,10 @@ from icecream import ic
 from data import data_gen, car_val
 import matplotlib.pyplot as plt
 
-N_SEQ = 1000
-EPOCHS = 1_0000
-N_SAMPLES = 500
-DEVICE = "cpu"
+N_SEQ = 1_000
+EPOCHS = 100_000
+N_SAMPLES = 1_000
+DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 class Net(nn.Module):
@@ -124,6 +124,7 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
 
 
 def main():
+    ic(DEVICE)
     data = data_gen(N_SEQ)
     dataset = TensorDataset(torch.Tensor(data))
     loader = DataLoader(dataset, batch_size=50, shuffle=True)
@@ -132,6 +133,7 @@ def main():
     pred = samples[:, :3]
     actions = samples[:, 3:]
     val = car_val(pred, actions)
+    torch.save(trained_model.state_dict(), "model.pt")
     ic(val["mse"])
     plt.scatter(val["states"][:, 0], val["states"][:, 1], label="states")
     plt.scatter(pred[:, 0], pred[:, 1], label="prediction", alpha=0.5)
