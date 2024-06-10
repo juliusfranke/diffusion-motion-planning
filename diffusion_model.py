@@ -4,24 +4,26 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from icecream import ic
-from data import data_gen, car_val
+from data import data_gen, car_val, gen_car_state_area
 import matplotlib.pyplot as plt
-import alphashape
+import shapely
+
+# import alphashape
 import geopandas as gpd
 
 N_SEQ = 1_000
-EPOCHS = 2_00
+EPOCHS = 20_000
 N_SAMPLES = 1_000
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 class Net(nn.Module):
-    def __init__(self, nhidden: int = 256):
+    def __init__(self, nhidden: int = 128):
         super().__init__()
         layers = [
             nn.Linear(6, nhidden)
         ]  # Change this to 6 if you want to use the fourier embeddings of t
-        for _ in range(3):
+        for _ in range(8):
             layers.append(nn.Linear(nhidden, nhidden))
         layers.append(nn.Linear(nhidden, 5))
         self.linears = nn.ModuleList(layers)
@@ -128,6 +130,8 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
 def main():
     ic(DEVICE)
     data = data_gen(N_SEQ)
+    data_max = np.max(data[:, 3:], axis=0)
+    data_min = np.min(data[:, 3:], axis=0)
     # plt.show()
     dataset = TensorDataset(torch.Tensor(data))
     loader = DataLoader(dataset, batch_size=50, shuffle=True)
@@ -140,9 +144,12 @@ def main():
     max_actions = np.max(actions, axis=0)
     min_actions = np.min(actions, axis=0)
     for n_action in range(len(max_actions)):
-        action_min = min_actions[n_action]
-        action_max = max_actions[n_action]
-        ic(n_action, action_min, action_max)
+        pred_min = min_actions[n_action]
+        pred_max = max_actions[n_action]
+        action_min = data_min[n_action]
+        action_max = data_max[n_action]
+
+        ic(n_action, pred_min, action_min, pred_max, action_max)
 
     val = car_val(pred, actions)
 
@@ -156,27 +163,37 @@ def main():
 
     xy_states = val["states"][:, :2][error_sel]
     xy_pred = pred[:, :2][error_sel]
+    # ic(xy_states, xy_pred)
     # plt.figure()
-    xy_states_poly = val["states"][:, :2]
-    shape = alphashape.alphashape(xy_states_poly, 0.0)
+    # forward = actions[:, 0] > 0
+    xy_states_poly = gen_car_state_area(60)
+    # ic(xy_states_poly[:10, :])
+    shape = shapely.Polygon(xy_states_poly)
+    # ic(shape.area)
     g = gpd.GeoSeries(shape)
-    g.plot(alpha=0.2)
+    g.plot(alpha=0.2, color="orange")
     plt.scatter(data[:, 0], data[:, 1], label="training")
+    # plt.plot(*zip(*xy_states_poly), label="test")
     # plt.figure()
     # plt.hist(val["error"])
 
     # plt.figure()
 
-    # plt.quiver(
-    #     xy_states[:, 0],
-    #     xy_states[:, 1],
-    #     xy_pred[:, 0] - xy_states[:, 0],
-    #     xy_pred[:, 1] - xy_states[:, 1],
-    #     label="error",
-    # )
-    # plt.scatter(xy_states[:, 0], xy_states[:, 1], label="states")
-    # plt.scatter(xy_pred[:, 0], xy_pred[:, 1], label="prediction", alpha=0.5)
-    # plt.legend()
+    plt.quiver(
+        xy_states[:, 0],
+        xy_states[:, 1],
+        xy_pred[:, 0] - xy_states[:, 0],
+        xy_pred[:, 1] - xy_states[:, 1],
+        # xy_pred[:, 0],
+        # xy_pred[:, 1],
+        label="error",
+        scale=1,
+        scale_units="xy",
+    )
+    plt.axis("equal")
+    plt.scatter(xy_states[:, 0], xy_states[:, 1], label="states")
+    plt.scatter(xy_pred[:, 0], xy_pred[:, 1], label="prediction", alpha=0.5)
+    plt.legend()
     # plt.figure()
     # plt.scatter(actions[:, 0], val["error"])
     # plt.figure()
