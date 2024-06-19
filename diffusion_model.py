@@ -1,31 +1,46 @@
-import torch
+# import torch
 import torch.utils.data
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
+from typing import Dict
 from icecream import ic
 from data import data_gen, car_val, gen_car_state_area
 import matplotlib.pyplot as plt
 import shapely
+from tabulate import tabulate
+
+import sys
+from db import Database
 
 # import alphashape
 import geopandas as gpd
 
 N_SEQ = 1_000
-EPOCHS = 20_000
+EPOCHS = 200
 N_SAMPLES = 1_000
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 class Net(nn.Module):
-    def __init__(self, nhidden: int = 128):
+    def __init__(self, config: Dict):
         super().__init__()
+        input_size = (
+            config["dim_state"] * config["state_in"]
+            + config["dim_action"] * config["action_in"]
+            + 1
+        )
+        output_size = (
+            config["dim_state"] * config["state_out"]
+            + config["dim_action"] * config["action_out"]
+        )
+        ic(input_size, output_size)
         layers = [
-            nn.Linear(6, nhidden)
+            nn.Linear(input_size, config["s_hidden"])
         ]  # Change this to 6 if you want to use the fourier embeddings of t
-        for _ in range(8):
-            layers.append(nn.Linear(nhidden, nhidden))
-        layers.append(nn.Linear(nhidden, 5))
+        for _ in range(config["n_hidden"]):
+            layers.append(nn.Linear(config["s_hidden"], config["s_hidden"]))
+        layers.append(nn.Linear(config["s_hidden"], output_size))
         self.linears = nn.ModuleList(layers)
 
         for layer in self.linears:
@@ -59,9 +74,10 @@ def get_alpha_betas(N: int):
     return alpha_bars, betas
 
 
-def train(loader: DataLoader, nepochs: int = 10, denoising_steps: int = 100):
+def train(
+    model: Net, loader: DataLoader, nepochs: int = 10, denoising_steps: int = 100
+):
     """Alg 1 from the DDPM paper"""
-    model = Net()
     model.to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     alpha_bars, _ = get_alpha_betas(denoising_steps)  # Precompute alphas
@@ -136,7 +152,6 @@ def main():
     dataset = TensorDataset(torch.Tensor(data))
     loader = DataLoader(dataset, batch_size=50, shuffle=True)
     trained_model = train(loader, EPOCHS)
-    torch.save(trained_model.state_dict(), "model.pt")
 
     samples = sample(trained_model, N_SAMPLES).detach().cpu().numpy()
     pred = samples[:, :3]
@@ -161,6 +176,7 @@ def main():
     ic(val["mse"])
     ic(max_error, min_error)
 
+    torch.save(trained_model.state_dict(), "model.pt")
     xy_states = val["states"][:, :2][error_sel]
     xy_pred = pred[:, :2][error_sel]
     # ic(xy_states, xy_pred)
@@ -170,9 +186,10 @@ def main():
     # ic(xy_states_poly[:10, :])
     shape = shapely.Polygon(xy_states_poly)
     # ic(shape.area)
-    g = gpd.GeoSeries(shape)
-    g.plot(alpha=0.2, color="orange")
     plt.scatter(data[:, 0], data[:, 1], label="training")
+    # plt.figure()
+    g = gpd.GeoSeries(shape)
+    g.plot(alpha=0.2, color="blue")
     # plt.plot(*zip(*xy_states_poly), label="test")
     # plt.figure()
     # plt.hist(val["error"])
@@ -187,12 +204,28 @@ def main():
         # xy_pred[:, 0],
         # xy_pred[:, 1],
         label="error",
+        alpha=0.5,
         scale=1,
         scale_units="xy",
+        color="grey",
     )
     plt.axis("equal")
-    plt.scatter(xy_states[:, 0], xy_states[:, 1], label="states")
-    plt.scatter(xy_pred[:, 0], xy_pred[:, 1], label="prediction", alpha=0.5)
+    plt.scatter(
+        xy_states[:, 0],
+        xy_states[:, 1],
+        label="states",
+        alpha=0.7,
+        marker="+",
+        c="green",
+    )
+    plt.scatter(
+        xy_pred[:, 0],
+        xy_pred[:, 1],
+        label="prediction",
+        alpha=0.7,
+        marker="x",
+        c="orange",
+    )
     plt.legend()
     # plt.figure()
     # plt.scatter(actions[:, 0], val["error"])
@@ -200,6 +233,85 @@ def main():
     # plt.scatter(actions[:, 1], val["error"])
 
     plt.show()
+
+
+def plotTraining(trainingData) -> None:
+    plt.scatter(trainingData[:, 0], trainingData[:, 1], label="training")
+
+
+def plotError(errorData) -> None:
+    pass
+
+
+def trainRun(args):
+    ic(args)
+    args = vars(args)
+    if args["generate"]:
+        data = data_gen(args["trainingsize"])
+    else:
+        raise NotImplementedError
+
+    db = Database(filename="data.json")
+    data_dict = {
+        "type": "car",
+        "n_hidden": args["nhidden"],
+        "s_hidden": args["shidden"],
+        "dim_action": 2,
+        "dim_state": 3,
+        "action_in": True,
+        "action_out": True,
+        "state_in": True,
+        "state_out": True,
+    }
+    uuid = db.getUUID(data_dict)
+    # data_dict["uuid"] = uuid
+    data_max = np.max(data[:, 3:], axis=0)
+    data_min = np.min(data[:, 3:], axis=0)
+
+    dataset = TensorDataset(torch.Tensor(data))
+    loader = DataLoader(dataset, batch_size=50, shuffle=True)
+
+    model = Net(data_dict)
+    trained_model = train(model, loader, EPOCHS)
+    # torch.save(trained_model.state_dict(), "model.pt")
+    samples = sample(trained_model, N_SAMPLES).detach().cpu().numpy()
+    pred = samples[:, :3]
+    actions = samples[:, 3:]
+    max_actions = np.max(actions, axis=0)
+    min_actions = np.min(actions, axis=0)
+    for n_action in range(len(max_actions)):
+        pred_min = min_actions[n_action]
+        pred_max = max_actions[n_action]
+        action_min = data_min[n_action]
+        action_max = data_max[n_action]
+
+        ic(n_action, pred_min, action_min, pred_max, action_max)
+
+    val = car_val(pred, actions)
+
+    max_error = np.max(val["error"])
+    min_error = np.min(val["error"])
+
+    ic(val["mse"])
+    ic(max_error, min_error)
+    if uuid in db.check:
+        if val["mse"] > db.data["data"][str(uuid)]["mse"]:
+            print("not saving")
+            sys.exit()
+    print("saving")
+    data_dict["mse"] = val["mse"]
+    db.addEntry(data_dict, uuid)
+    torch.save(trained_model.state_dict(), str(uuid))
+
+
+def loadRun(args):
+    pass
+
+
+def listRun():
+    db = Database("data.json")
+    data = db.tabulate(keys=["uuid", "type", "s_hidden"])
+    print(data)
 
 
 if __name__ == "__main__":

@@ -60,9 +60,9 @@ def gen_car_action() -> np.ndarray:
         s_low = -2 * min - zero_bound
         s_high = 2 * max - zero_bound
         if choice >= r:
-            return s_high / (1 + np.exp(-5 / r * (choice - r))) + max - s_high
+            return s_high / (1 + np.exp(-7 / r * (choice - r))) + max - s_high
         else:
-            return s_low / (1 + np.exp(-5 / r * (choice - r))) + min
+            return s_low / (1 + np.exp(-7 / r * (choice - r))) + min
 
     s = log_piecewise(S_MIN, S_MAX)
     phi = log_piecewise(PHI_MIN, PHI_MAX, zero_bound=0)
@@ -80,7 +80,7 @@ def metric(a: np.ndarray, b: np.ndarray) -> float:
             )
         ]
     )
-    sq_err = np.square(np.sum(np.concatenate([err_xy.T, err_th], axis=0), axis=0))
+    sq_err = np.sum(np.square(np.concatenate([err_xy.T, err_th], axis=0)), axis=0)
 
     return sq_err
 
@@ -112,8 +112,11 @@ def data_gen(length: int) -> np.ndarray:
             # ic(min_dist)
             if min_dist < 0.015:
                 continue
-        data.append(np.concatenate([state, action], axis=-1))
+        state_action = np.concatenate([state, action], axis=-1)
+        noise = np.random.normal(0, 5e-3, state_action.shape[0])
+        data.append(state_action + noise)
+
         # ic(len(data))
         if len(data) % 100 == 0:
-            ic(len(data) + 1)
+            ic(len(data))
     return np.array(data)
