@@ -5,10 +5,9 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from typing import Dict
 from icecream import ic
-from data import data_gen, car_val, gen_car_state_area
+from data import data_gen, car_val, gen_car_state_area, read_yaml, calc_unicycle_states
 import matplotlib.pyplot as plt
 import shapely
-from tabulate import tabulate
 
 import sys
 from db import Database
@@ -75,13 +74,21 @@ def get_alpha_betas(N: int):
 
 
 def train(
-    model: Net, loader: DataLoader, nepochs: int = 10, denoising_steps: int = 100
+    model: Net,
+    loader: DataLoader,
+    config: Dict,
+    nepochs: int = 10,
+    denoising_steps: int = 100,
 ):
     """Alg 1 from the DDPM paper"""
     model.to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     alpha_bars, _ = get_alpha_betas(denoising_steps)  # Precompute alphas
     losses = []
+    output_size = (
+        config["dim_state"] * config["state_out"]
+        + config["dim_action"] * config["action_out"]
+    )
     for epoch in range(nepochs):
         for [data] in loader:
             data = data.to(DEVICE)
@@ -96,6 +103,8 @@ def train(
                 .unsqueeze(1)
                 .to(DEVICE)
             )  # Get the alphas for each timestep
+            # ic(data.shape)
+            # ic(config["actions"].shape)
             noise = torch.randn(
                 *data.shape, device=DEVICE
             )  # Sample DIFFERENT random noise for each datapoint
@@ -103,7 +112,9 @@ def train(
                 alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
             )  # Noise corrupt the data (eq14)
             out = model(model_in, t.unsqueeze(1).to(DEVICE))
-            loss = torch.mean((noise - out) ** 2)  # Compute loss on prediction (eq14)
+            loss = torch.mean(
+                (noise[:, :10] - out) ** 2
+            )  # Compute loss on prediction (eq14)
             losses.append(loss.detach().cpu().numpy())
 
             # Bwd pass
@@ -121,7 +132,7 @@ def train(
 
 def sample(trained_model, n_samples: int, n_steps: int = 100):
     """Alg 2 from the DDPM paper."""
-    x_t = torch.randn((n_samples, 5)).to(DEVICE)
+    x_t = torch.randn((n_samples, 10)).to(DEVICE)
     alpha_bars, betas = get_alpha_betas(n_steps)
     alphas = 1 - betas
     for t in range(len(alphas))[::-1]:
@@ -129,9 +140,9 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
         ab_t = alpha_bars[t] * torch.ones((n_samples, 1)).to(
             DEVICE
         )  # Tile the alpha to the number of samples
-        z = (torch.randn((n_samples, 5)) if t > 1 else torch.zeros((n_samples, 5))).to(
-            DEVICE
-        )
+        z = (
+            torch.randn((n_samples, 10)) if t > 1 else torch.zeros((n_samples, 10))
+        ).to(DEVICE)
         model_prediction = trained_model(x_t, ts)
         x_t = (
             1
@@ -139,6 +150,8 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
             * (x_t - betas[t] / (1 - ab_t) ** 0.5 * model_prediction)
         )
         x_t += betas[t] ** 0.5 * z
+        # ext = torch.randn((n_samples, 18)).to(DEVICE)
+        # x_t = torch.concat((x_t, ext), dim=-1)
 
     return x_t
 
@@ -244,37 +257,88 @@ def plotError(errorData) -> None:
 
 
 def trainRun(args):
-    ic(args)
+    # ic(args)
     args = vars(args)
+    db = Database(filename="data.json")
     if args["generate"]:
         data = data_gen(args["trainingsize"])
+        data_dict = {
+            "type": "car",
+            "n_hidden": args["nhidden"],
+            "s_hidden": args["shidden"],
+            "dim_action": 2,
+            "dim_state": 3,
+            "action_in": True,
+            "action_out": True,
+            "state_in": True,
+            "state_out": True,
+        }
     else:
-        raise NotImplementedError
+        data_0 = read_yaml(args["load"])
+        data_dict = {
+            "type": "car",
+            "n_hidden": args["nhidden"],
+            "s_hidden": args["shidden"],
+            "dim_action": data_0["action_dim"],
+            # "dim_state": data_0["state_dim"],
+            "dim_state": 0,
+            "action_in": True,
+            "action_out": True,
+            "state_in": True,
+            "state_out": False,
+        }
+        # data = np.concatenate([data_0["states"], data_0["actions"]], axis=-1)
+        data = data_0["actions"]
+        ic(data_0["actions"].shape)
+        # ic(data)
+        # ic(data.shape)
 
-    db = Database(filename="data.json")
-    data_dict = {
-        "type": "car",
-        "n_hidden": args["nhidden"],
-        "s_hidden": args["shidden"],
-        "dim_action": 2,
-        "dim_state": 3,
-        "action_in": True,
-        "action_out": True,
-        "state_in": True,
-        "state_out": True,
-    }
-    uuid = db.getUUID(data_dict)
+    # sys.exit()
+    # uuid = db.getUUID(data_dict)
     # data_dict["uuid"] = uuid
-    data_max = np.max(data[:, 3:], axis=0)
-    data_min = np.min(data[:, 3:], axis=0)
+    # data_max = np.max(data[:, 3:], axis=0)
+    # data_min = np.min(data[:, 3:], axis=0)
 
     dataset = TensorDataset(torch.Tensor(data))
     loader = DataLoader(dataset, batch_size=50, shuffle=True)
 
     model = Net(data_dict)
-    trained_model = train(model, loader, EPOCHS)
-    # torch.save(trained_model.state_dict(), "model.pt")
+    trained_model = train(model, loader, data_dict, args["epochs"])
+    torch.save(trained_model.state_dict(), "unicycle.pt")
     samples = sample(trained_model, N_SAMPLES).detach().cpu().numpy()
+    # ic(samples)
+    # for s in samples:
+    #     ic(s)
+    #     for i in range(5):
+    #         ic(s[i * 2 : i * 2 + 2])
+
+    sample_state = calc_unicycle_states(samples[0])
+    ic(sample_state)
+    a_max = np.maximum(
+        np.max(samples[:, :2], axis=0), np.max(data_0["actions"][:, :2], axis=0)
+    )
+    a_min = np.minimum(
+        np.min(samples[:, :2], axis=0), np.min(data_0["actions"][:, :2], axis=0)
+    )
+    n_bins = 100
+    bins_s = np.linspace(np.floor(a_min[0]), np.ceil(a_max[0]), n_bins)
+    bins_phi = np.linspace(np.floor(a_min[1]), np.ceil(a_max[1]), n_bins)
+    fig, (ax1, ax2) = plt.subplots(2)
+    ax1.hist(data_0["actions"][:, 0], bins=bins_s, alpha=0.5, label="training data")
+    ax1.hist(samples[:, 0], bins=bins_s, alpha=0.5, label="predicted")
+    ax1.legend()
+    ax1.set_title("distribution of s")
+    ax2.hist(data_0["actions"][:, 1], bins=bins_phi, alpha=0.5, label="training data")
+    ax2.hist(samples[:, 1], bins=bins_phi, alpha=0.5, label="predicted")
+    ax2.legend()
+    ax2.set_title("distribution of phi")
+    plt.show()
+    for i in range(5):
+        state = calc_unicycle_states(samples[i])
+        plt.plot(state[:, 1], state[:, 2])
+
+    plt.show()
+    sys.exit()
     pred = samples[:, :3]
     actions = samples[:, 3:]
     max_actions = np.max(actions, axis=0)

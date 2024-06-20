@@ -1,11 +1,32 @@
 import numpy as np
 from typing import List
 from icecream import ic
+import yaml
 
 S_MIN = -1
 S_MAX = 2
 PHI_MIN = -np.pi / 3
 PHI_MAX = np.pi / 3
+
+
+def calc_unicycle_states(
+    actions: np.ndarray, dt: float = 0.1, start: List[float] = [0, 0, 0]
+):
+    x, y, theta = start
+    actions = actions.reshape(5, 2)
+
+    states = [start]
+    for s, phi in actions:
+        dx = dt * s * np.cos(theta)
+        dy = dt * s * np.sin(theta)
+        dtheta = dt * phi
+
+        x += dx
+        y += dy
+        theta += dtheta
+        states.append([x, y, theta])
+
+    return np.array(states)
 
 
 def calc_car_state(
@@ -120,3 +141,29 @@ def data_gen(length: int) -> np.ndarray:
         if len(data) % 100 == 0:
             ic(len(data))
     return np.array(data)
+
+
+def read_yaml(path):
+    with open(path, "r") as file:
+        data = yaml.safe_load(file)
+    states = []
+    actions = []
+    # ic(data)
+    for sample in data:
+        states.append([st for sts in sample["states"] for st in sts])
+        actions.append([ac for acs in sample["actions"] for ac in acs])
+    states = np.array(states)
+    actions = np.array(actions)
+    # print(states)
+    # ic(actions)
+    data_dict = {
+        "states": states,
+        "actions": actions,
+        "state_dim": len(states[0]),
+        "action_dim": len(actions[0]),
+    }
+    return data_dict
+
+
+if __name__ == "__main__":
+    read_yaml("data/my_motions.bin.im.bin.sp.bin.yaml")
