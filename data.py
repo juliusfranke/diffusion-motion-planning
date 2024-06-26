@@ -2,6 +2,8 @@ import numpy as np
 from typing import List
 from icecream import ic
 import yaml
+import matplotlib.pyplot as plt
+from sklearn.utils import shuffle
 
 S_MIN = -1
 S_MAX = 2
@@ -13,6 +15,7 @@ def calc_unicycle_states(
     actions: np.ndarray, dt: float = 0.1, start: List[float] = [0, 0, 0]
 ):
     x, y, theta = start
+    # ic(x, y, theta)
     actions = actions.reshape(5, 2)
 
     states = [start]
@@ -148,22 +151,96 @@ def read_yaml(path):
         data = yaml.safe_load(file)
     states = []
     actions = []
+    start = []
+    goal = []
     # ic(data)
     for sample in data:
-        states.append([st for sts in sample["states"] for st in sts])
+        # offset = np.array([*np.random.uniform(-10, 10, 2), 0])
+        offset = 0
+
+        start.append(np.array(sample["start"]) + offset)
+        goal.append(np.array(sample["goal"]) + offset)
+        sample_state = np.array(sample["states"]) + offset
+        states.append([st for sts in sample_state for st in sts])
         actions.append([ac for acs in sample["actions"] for ac in acs])
     states = np.array(states)
     actions = np.array(actions)
+    # breakpoint()
+    start = np.array(start)
+    goal = np.array(goal)
+
+    states, actions, start, goal = shuffle(states, actions, start, goal)
     # print(states)
-    # ic(actions)
+    ic(start.shape, goal.shape)
     data_dict = {
         "states": states,
         "actions": actions,
+        "start": start,
+        "goal": goal,
         "state_dim": len(states[0]),
         "action_dim": len(actions[0]),
     }
     return data_dict
 
 
+def spiral_points(arc=0.25, separation=0.5):
+    """generate points on an Archimedes' spiral
+    with `arc` giving the length of arc between two points
+    and `separation` giving the distance between consecutive
+    turnings
+    - approximate arc length with circle arc at given distance
+    - use a spiral equation r = b * phi
+    """
+
+    def p2c(r, phi):
+        """polar to cartesian"""
+        return (r * np.cos(phi), r * np.sin(phi), (phi + np.pi / 2) % (2 * np.pi))
+
+    # yield a point at origin
+    yield (0, 0, 0)
+
+    # initialize the next point in the required distance
+    r = arc
+    b = separation / (2 * np.pi)
+    # find the first phi to satisfy distance of `arc` to the second point
+    phi = float(r) / b
+    while True:
+        yield p2c(r, phi)
+        # advance the variables
+        # calculate phi that will give desired arc length at current radius
+        # (approximating with circle)
+        phi += float(arc) / r
+        r = b * phi
+
+
 if __name__ == "__main__":
-    read_yaml("data/my_motions.bin.im.bin.sp.bin.yaml")
+    data = read_yaml("data/my_motions.bin.im.bin.sp.bin.yaml")
+    # s = []
+    phi_max = 0
+    phi_min = 0
+    for actions in data["actions"]:
+        actions = actions.reshape(5, 2)
+        min = np.min(actions[:, 0])
+        max = np.max(actions[:, 0])
+        if min < phi_min:
+            phi_min = min
+        if max > phi_max:
+            phi_max = max
+
+    ic(phi_min, phi_max)
+    # breakpoint()
+    for sample in data["states"]:
+        sample = sample.reshape(6, 3)
+        plt.plot(sample[:, 0], sample[:, 1])
+    plt.show()
+
+    # p = spiral_points()
+    # points = np.array([next(p) for _ in range(20)])
+    # # ic(points)
+    # u = np.cos(points[:, 2])
+    # v = np.sin(points[:, 2])
+
+    # # ic(u, v)
+    # plt.plot(points[:, 0], points[:, 1])
+    # plt.quiver(points[:, 0], points[:, 1], u, v)
+    # plt.show()

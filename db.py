@@ -1,5 +1,21 @@
-import json
 import sys
+from sqlalchemy import (
+    create_engine,
+    insert,
+    # drop,
+    ForeignKey,
+    Boolean,
+    Column,
+    Integer,
+    String,
+    Float,
+    func,
+    DateTime,
+)
+
+from sqlalchemy.ext.declarative import declarative_base
+
+from sqlalchemy.orm import relationship
 from icecream import ic
 from typing import List, Any, Dict
 import pathlib
@@ -8,19 +24,21 @@ import pandas as pd
 import numpy as np
 import uuid
 
-STRUCTURE = {
-    "uuid": "UUID",
-    "type": "str",
-    "n_hidden": "int",
-    "s_hidden": "int",
-    "dim_action": "int",
-    "dim_state": "int",
-    "action_in": "bool",
-    "action_out": "bool",
-    "state_in": "bool",
-    "state_out": "bool",
-    "mse": "float",
-}
+Base = declarative_base()
+engine = create_engine("sqlite:///database.db", echo=True)
+# STRUCTURE = {
+#     "uuid": "UUID",
+#     "type": "str",
+#     "n_hidden": "int",
+#     "s_hidden": "int",
+#     "dim_action": "int",
+#     "dim_state": "int",
+#     "action_in": "bool",
+#     "action_out": "bool",
+#     "state_in": "bool",
+#     "state_out": "bool",
+#     "mse": "float",
+# }
 
 
 def isFile(string: str):
@@ -31,21 +49,66 @@ def isFile(string: str):
         return False
 
 
+class Dynamics(Base):
+    __tablename__ = "dynamics"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    action_dim = Column(Integer)
+    state_dim = Column(Integer)
+    metric_type = Column(String)
+
+
+class ModelConfigs(Base):
+    __tablename__ = "model_configs"
+
+    id = Column(Integer, primary_key=True)
+    num_hidden = Column(Integer)
+    size_hidden = Column(Integer)
+    state_in = Column(Boolean)
+    state_out = Column(Boolean)
+    goal_in = Column(Boolean)
+    diff_in = Column(Boolean)
+
+
+class Training(Base):
+    __tablename__ = "training"
+
+    id = Column(Integer, primary_key=True)
+    dyn_id = Column(Integer, ForeignKey("dynamics.id"))
+    model_config_id = Column(Integer, ForeignKey("model_configs.id"))
+    epochs = Column(Integer)
+    mean_loss = Column(Float)
+    metric = Column(Float)
+    relpath = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    dynamics = relationship("Dynamics", back_populates="training")
+    modelConfigs = relationship("ModelConfigs", back_populates="training")
+
+
 class Database:
-    def __init__(self, filename) -> None:
+    def __init__(self, filename="database/sqlite.db", reset: bool = False) -> None:
         self.filename = pathlib.Path(filename)
-        if not isFile(filename):
+        self.engine = create_engine(self.filename)
+
+        if not self.filename.exists():
             self._create()
+
+        if reset:
+            self.reset()
 
         self.data = self._read()
         self.check = []
 
     def _create(self) -> None:
-        data = pd.DataFrame(columns=list(STRUCTURE.keys()))
-        data.to_json(self.filename)
-        # json_object = json.dumps(data)
-        # with open(self.filename, "w") as file:
-        #     file.write(json_object)
+        Dynamics.training = relationship(
+            "Training", order_by=Training.id, back_populates="Dynamics"
+        )
+        ModelConfigs.training = relationship(
+            "Training", order_by=Training.id, back_populates="ModelConfigs"
+        )
+        Base.metadata.create_all(engine)
 
     def _write(self) -> None:
         self.data.to_json(self.filename, orient="records", default_handler=str)
@@ -53,6 +116,9 @@ class Database:
     def _read(self) -> pd.DataFrame:
         df = pd.read_json(self.filename)
         return df
+
+    def reset(self):
+        Base.metadata.drop_all(self.engine)
 
     def addEntry(self, data: Dict, uuid: uuid.UUID):
         data["uuid"] = uuid
@@ -117,33 +183,57 @@ class Database:
 
 
 def main():
-    db = Database(filename="data.json")
-    test = {
-        "type": "car",
-        "n_hidden": 4,
-        "s_hidden": 256,
-        "dim_action": 2,
-        "dim_state": 3,
-        "action_in": True,
-        "action_out": True,
-        "state_in": True,
-        "state_out": True,
-    }
-    print(test)
-    _uuid = db.getUUID(test)
-    test["mse"] = 0.1
-    db.addEntry(test, _uuid)
-    test["s_hidden"] = 128
-    test["mse"] = 0.2
-    db.addEntry(test, uuid.uuid4())
-    test.pop("mse")
-    test.pop("uuid")
-    print(test)
-    # breakpoint()
-    _uuid = db.getUUID(test)
-    test["mse"] = 0.15
-    db.addEntry(test, _uuid)
-    print(type(uuid))
+    stmt = insert(Dynamics).values(
+        name="Unicycle", action_dim=3, state_dim=3, metric_type="SO3"
+    )
+    engine.execute(stmt)
+
+    stmt = insert(ModelConfigs).values(
+        num_hidden=4,
+        size_hidden=128,
+        state_in=True,
+        state_out=False,
+        goal_in=True,
+        diff_in=False,
+    )
+    engine.execute(stmt)
+
+    stmt = insert(Training).values(
+        dyn_id=1,
+        model_config_id=1,
+        epochs=20000,
+        mean_loss=0.02,
+        metric=0.1,
+        relpath="some/path",
+    )
+    engine.execute(stmt)
+    # db = Database(filename="data.json")
+    # test = {
+    #     "type": "car",
+    #     "n_hidden": 4,
+    #     "s_hidden": 256,
+    #     "dim_action": 2,
+    #     "dim_state": 3,
+    #     "action_in": True,
+    #     "action_out": True,
+    #     "state_in": True,
+    #     "state_out": True,
+    # }
+    # print(test)
+    # _uuid = db.getUUID(test)
+    # test["mse"] = 0.1
+    # db.addEntry(test, _uuid)
+    # test["s_hidden"] = 128
+    # test["mse"] = 0.2
+    # db.addEntry(test, uuid.uuid4())
+    # test.pop("mse")
+    # test.pop("uuid")
+    # print(test)
+    # # breakpoint()
+    # _uuid = db.getUUID(test)
+    # test["mse"] = 0.15
+    # db.addEntry(test, _uuid)
+    # print(type(uuid))
     # test_1 = {
     #     "type": "car",
     #     "n_hidden": 4,

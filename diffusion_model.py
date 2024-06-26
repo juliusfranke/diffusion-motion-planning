@@ -5,7 +5,14 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from typing import Dict
 from icecream import ic
-from data import data_gen, car_val, gen_car_state_area, read_yaml, calc_unicycle_states
+from data import (
+    data_gen,
+    car_val,
+    gen_car_state_area,
+    read_yaml,
+    calc_unicycle_states,
+    spiral_points,
+)
 import matplotlib.pyplot as plt
 import shapely
 
@@ -46,11 +53,26 @@ class Net(nn.Module):
             # init using kaiming
             nn.init.kaiming_uniform_(layer.weight)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor):
+    def forward(
+        self, x: torch.Tensor, start: torch.Tensor, goal: torch.Tensor, t: torch.Tensor
+    ):
         # Optional: Use Fourier feature embeddings for t, cf. transformers
         # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
-        x = torch.concat([x, t], dim=-1)
+        # ic(x.shape, start.shape, goal.shape, t.shape)
+
+        # diff_xy = goal[:, :2] - start[:, :2]
+        # # pos_diff =
+        # a = (goal[:, 2] - start[:, 2]) % (2 * np.pi)
+        # b = (start[:, 2] - goal[:, 2]) % (2 * np.pi)
+        # diff_theta = -a * (a < b) + b * (b <= a)
+        # diff_theta = diff_theta.reshape(-1, 1)
+        # breakpoint()
+        # diff = torch.concat([diff_xy, diff_theta], dim=-1)
+        # diff_theta = goal[:, :2] - start[:, :2]
+        # x = torch.concat([x, diff, t], dim=-1)
+        x = torch.concat([x, start, goal, t], dim=-1)
         # ic(x.shape)
+        # breakpoint()
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
         return self.linears[-1](x)
@@ -92,6 +114,9 @@ def train(
     for epoch in range(nepochs):
         for [data] in loader:
             data = data.to(DEVICE)
+            start = data[:, 10:13]
+            goal = data[:, 13:]
+            data = data[:, :10]
             optimizer.zero_grad()
 
             # Fwd pass
@@ -111,7 +136,7 @@ def train(
             model_in = (
                 alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
             )  # Noise corrupt the data (eq14)
-            out = model(model_in, t.unsqueeze(1).to(DEVICE))
+            out = model(model_in, start, goal, t.unsqueeze(1).to(DEVICE))
             loss = torch.mean(
                 (noise[:, :10] - out) ** 2
             )  # Compute loss on prediction (eq14)
@@ -133,6 +158,23 @@ def train(
 def sample(trained_model, n_samples: int, n_steps: int = 100):
     """Alg 2 from the DDPM paper."""
     x_t = torch.randn((n_samples, 10)).to(DEVICE)
+
+    # p = spiral_points()
+    # points = [next(p) for _ in range(n_samples + 1)]
+    # start = torch.Tensor(points[:n_samples])
+    # goal = torch.Tensor(points[1:])
+
+    theta = np.linspace(-np.pi / 2, np.pi / 2, n_samples).reshape(-1, 1)
+    start = np.concatenate([np.zeros((n_samples, 2)), theta], axis=1)
+    goal = 0.25 * np.concatenate([np.cos(theta), np.sin(theta), theta], axis=1)
+    start = torch.Tensor(start)
+    goal = torch.Tensor(goal)
+    ic(start, goal)
+    # cond = np.array([next(p) for _ in range(20)])
+    # xy = -0.25 + 0.5 * torch.rand(n_samples, 2).to(DEVICE)
+    # th = -np.pi + 2 * np.pi * torch.rand(n_samples, 2).to(DEVICE)
+    # cond = torch.concat((xy, th), dim=-1)
+
     alpha_bars, betas = get_alpha_betas(n_steps)
     alphas = 1 - betas
     for t in range(len(alphas))[::-1]:
@@ -143,15 +185,14 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
         z = (
             torch.randn((n_samples, 10)) if t > 1 else torch.zeros((n_samples, 10))
         ).to(DEVICE)
-        model_prediction = trained_model(x_t, ts)
+        model_prediction = trained_model(x_t, start, goal, ts)
         x_t = (
             1
             / alphas[t] ** 0.5
             * (x_t - betas[t] / (1 - ab_t) ** 0.5 * model_prediction)
         )
         x_t += betas[t] ** 0.5 * z
-        # ext = torch.randn((n_samples, 18)).to(DEVICE)
-        # x_t = torch.concat((x_t, ext), dim=-1)
+        # x_t = torch.concat((x_t,), dim=-1)
 
     return x_t
 
@@ -259,7 +300,7 @@ def plotError(errorData) -> None:
 def trainRun(args):
     # ic(args)
     args = vars(args)
-    db = Database(filename="data.json")
+    # db = Database(filename="data.json")
     if args["generate"]:
         data = data_gen(args["trainingsize"])
         data_dict = {
@@ -281,19 +322,21 @@ def trainRun(args):
             "s_hidden": args["shidden"],
             "dim_action": data_0["action_dim"],
             # "dim_state": data_0["state_dim"],
-            "dim_state": 0,
+            "dim_state": 6,
             "action_in": True,
             "action_out": True,
             "state_in": True,
             "state_out": False,
         }
-        # data = np.concatenate([data_0["states"], data_0["actions"]], axis=-1)
-        data = data_0["actions"]
-        ic(data_0["actions"].shape)
+        data = np.concatenate(
+            [data_0["actions"], data_0["start"], data_0["goal"]], axis=-1
+        )
+        # data = data_0["actions"]
+        # ic(data_0["actions"].shape)
+        # breakpoint()
         # ic(data)
-        # ic(data.shape)
+        ic(data.shape)
 
-    # sys.exit()
     # uuid = db.getUUID(data_dict)
     # data_dict["uuid"] = uuid
     # data_max = np.max(data[:, 3:], axis=0)
@@ -304,7 +347,7 @@ def trainRun(args):
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    torch.save(trained_model.state_dict(), "unicycle.pt")
+    torch.save(trained_model.state_dict(), "unicycle_larger.pt")
     samples = sample(trained_model, N_SAMPLES).detach().cpu().numpy()
     # ic(samples)
     # for s in samples:
@@ -333,10 +376,33 @@ def trainRun(args):
     ax2.legend()
     ax2.set_title("distribution of phi")
     plt.show()
-    for i in range(5):
-        state = calc_unicycle_states(samples[i])
-        plt.plot(state[:, 1], state[:, 2])
+    start = [0.0, 0.0, np.pi]
+    theta = np.linspace(-3 / 4 * np.pi, 3 / 4 * np.pi / 2, N_SAMPLES).reshape(-1, 1)
+    start_arr = np.concatenate([np.zeros((N_SAMPLES, 2)), theta], axis=1)
+    goal_arr = 0.25 * np.concatenate([np.cos(theta), np.sin(theta), theta], axis=1)
+    p = spiral_points()
+    n_plot = 5
+    points = [next(p)]
+    ic(points)
+    indices = np.linspace(0, N_SAMPLES - 1, n_plot, dtype=int)
+    for index in range(n_plot):
+        i = indices[index]
+        start = start_arr[i]
+        # goal = goal_arr[i]
+        ic(start)
+        ic(samples[i])
+        state = calc_unicycle_states(samples[i], start=start)
+        ic(state)
+        # start = next(p)
+        # points.append(start)
+        # start = state[-1]
+        plt.scatter(goal_arr[i, 0], goal_arr[i, 1], label=f"goal{index}")
+        plt.plot(state[:, 0], state[:, 1], label=f"primitive {index}")
 
+    # plt.scatter(goal_arr[:n_plot, 0], goal_arr[:n_plot, 1], label="goals")
+    # points = np.array(points)
+    # plt.plot(points[:, 0], points[:, 1], label="spiral")
+    plt.legend()
     plt.show()
     sys.exit()
     pred = samples[:, :3]
