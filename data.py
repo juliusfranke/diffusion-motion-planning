@@ -17,7 +17,6 @@ def calc_unicycle_states(
     x, y, theta = start
     # ic(x, y, theta)
     actions = actions.reshape(5, 2)
-
     states = [start]
     for s, phi in actions:
         dx = dt * s * np.cos(theta)
@@ -146,6 +145,33 @@ def data_gen(length: int) -> np.ndarray:
     return np.array(data)
 
 
+def circle_SO2(theta_range, n=100):
+    theta = np.linspace(-theta_range, theta_range, n).reshape(-1, 1)
+    start = np.concatenate([np.zeros((n, 2)), theta], axis=1)
+    goal = np.concatenate([0.25 * np.cos(theta), 0.25 * np.sin(theta), theta], axis=1)
+    ic(start, goal, theta)
+    diff = np.array(
+        [calc_diff_SO2(start_i, goal_i) for start_i, goal_i in zip(start, goal)]
+    )
+    data = {"start": start, "goal": goal, "diff": diff}
+    return data
+
+
+def calc_diff_SO2(start, goal):
+    start = np.array(start)
+    goal = np.array(goal)
+    rot = -start[2]
+    phi = goal[2] + rot
+    # print(rot, phi)
+    M_T = np.array(
+        [
+            [np.cos(rot), -np.sin(rot)],
+            [np.sin(rot), np.cos(rot)],
+        ]
+    )
+    return np.array([*(M_T @ (goal[:2] - start[:2])), phi])
+
+
 def read_yaml(path):
     with open(path, "r") as file:
         data = yaml.safe_load(file)
@@ -153,23 +179,28 @@ def read_yaml(path):
     actions = []
     start = []
     goal = []
+    diff = []
     # ic(data)
     for sample in data:
         # offset = np.array([*np.random.uniform(-10, 10, 2), 0])
         offset = 0
+        start_i = np.array(sample["start"])
+        goal_i = np.array(sample["goal"])
+        start.append(start_i + offset)
+        goal.append(goal_i + offset)
 
-        start.append(np.array(sample["start"]) + offset)
-        goal.append(np.array(sample["goal"]) + offset)
+        diff.append(calc_diff_SO2(start_i, goal_i))
         sample_state = np.array(sample["states"]) + offset
         states.append([st for sts in sample_state for st in sts])
         actions.append([ac for acs in sample["actions"] for ac in acs])
     states = np.array(states)
     actions = np.array(actions)
+    diff = np.array(diff)
     # breakpoint()
     start = np.array(start)
     goal = np.array(goal)
 
-    states, actions, start, goal = shuffle(states, actions, start, goal)
+    states, actions, start, goal, diff = shuffle(states, actions, start, goal, diff)
     # print(states)
     ic(start.shape, goal.shape)
     data_dict = {
@@ -177,6 +208,7 @@ def read_yaml(path):
         "actions": actions,
         "start": start,
         "goal": goal,
+        "diff": diff,
         "state_dim": len(states[0]),
         "action_dim": len(actions[0]),
     }
@@ -214,25 +246,27 @@ def spiral_points(arc=0.25, separation=0.5):
 
 
 if __name__ == "__main__":
-    data = read_yaml("data/my_motions.bin.im.bin.sp.bin.yaml")
-    # s = []
-    phi_max = 0
-    phi_min = 0
-    for actions in data["actions"]:
-        actions = actions.reshape(5, 2)
-        min = np.min(actions[:, 0])
-        max = np.max(actions[:, 0])
-        if min < phi_min:
-            phi_min = min
-        if max > phi_max:
-            phi_max = max
+    data = circle_SO2(8)
+    ic(data)
+    # data = read_yaml("data/my_motions.bin.im.bin.sp.bin.yaml")
+    # # s = []
+    # phi_max = 0
+    # phi_min = 0
+    # for actions in data["actions"]:
+    #     actions = actions.reshape(5, 2)
+    #     min = np.min(actions[:, 0])
+    #     max = np.max(actions[:, 0])
+    #     if min < phi_min:
+    #         phi_min = min
+    #     if max > phi_max:
+    #         phi_max = max
 
-    ic(phi_min, phi_max)
-    # breakpoint()
-    for sample in data["states"]:
-        sample = sample.reshape(6, 3)
-        plt.plot(sample[:, 0], sample[:, 1])
-    plt.show()
+    # ic(phi_min, phi_max)
+    # # breakpoint()
+    # for sample in data["states"]:
+    #     sample = sample.reshape(6, 3)
+    #     plt.plot(sample[:, 0], sample[:, 1])
+    # plt.show()
 
     # p = spiral_points()
     # points = np.array([next(p) for _ in range(20)])

@@ -12,6 +12,7 @@ from data import (
     read_yaml,
     calc_unicycle_states,
     spiral_points,
+    circle_SO2,
 )
 import matplotlib.pyplot as plt
 import shapely
@@ -31,6 +32,7 @@ DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 class Net(nn.Module):
     def __init__(self, config: Dict):
         super().__init__()
+        self.diff_in = config["diff_in"]
         input_size = (
             config["dim_state"] * config["state_in"]
             + config["dim_action"] * config["action_in"]
@@ -40,6 +42,7 @@ class Net(nn.Module):
             config["dim_state"] * config["state_out"]
             + config["dim_action"] * config["action_out"]
         )
+
         ic(input_size, output_size)
         layers = [
             nn.Linear(input_size, config["s_hidden"])
@@ -54,8 +57,18 @@ class Net(nn.Module):
             nn.init.kaiming_uniform_(layer.weight)
 
     def forward(
-        self, x: torch.Tensor, start: torch.Tensor, goal: torch.Tensor, t: torch.Tensor
+        self,
+        x: torch.Tensor,
+        start: torch.Tensor,
+        goal: torch.Tensor,
+        diff: torch.Tensor,
+        t: torch.Tensor,
     ):
+        if self.diff_in:
+            x = torch.concat([x, diff, t], dim=-1)
+        else:
+            x = torch.concat([x, start, goal, t], dim=-1)
+
         # Optional: Use Fourier feature embeddings for t, cf. transformers
         # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
         # ic(x.shape, start.shape, goal.shape, t.shape)
@@ -70,7 +83,6 @@ class Net(nn.Module):
         # diff = torch.concat([diff_xy, diff_theta], dim=-1)
         # diff_theta = goal[:, :2] - start[:, :2]
         # x = torch.concat([x, diff, t], dim=-1)
-        x = torch.concat([x, start, goal, t], dim=-1)
         # ic(x.shape)
         # breakpoint()
         for layer in self.linears[:-1]:
@@ -115,7 +127,8 @@ def train(
         for [data] in loader:
             data = data.to(DEVICE)
             start = data[:, 10:13]
-            goal = data[:, 13:]
+            goal = data[:, 13:16]
+            diff = data[:, 16:]
             data = data[:, :10]
             optimizer.zero_grad()
 
@@ -136,7 +149,7 @@ def train(
             model_in = (
                 alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
             )  # Noise corrupt the data (eq14)
-            out = model(model_in, start, goal, t.unsqueeze(1).to(DEVICE))
+            out = model(model_in, start, goal, diff, t.unsqueeze(1).to(DEVICE))
             loss = torch.mean(
                 (noise[:, :10] - out) ** 2
             )  # Compute loss on prediction (eq14)
@@ -164,12 +177,11 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
     # start = torch.Tensor(points[:n_samples])
     # goal = torch.Tensor(points[1:])
 
-    theta = np.linspace(-np.pi / 2, np.pi / 2, n_samples).reshape(-1, 1)
-    start = np.concatenate([np.zeros((n_samples, 2)), theta], axis=1)
-    goal = 0.25 * np.concatenate([np.cos(theta), np.sin(theta), theta], axis=1)
-    start = torch.Tensor(start)
-    goal = torch.Tensor(goal)
-    ic(start, goal)
+    circle = circle_SO2(np.pi / 2, n_samples)
+    start = torch.Tensor(circle["start"]).to(DEVICE)
+    goal = torch.Tensor(circle["goal"]).to(DEVICE)
+    diff = torch.Tensor(circle["diff"]).to(DEVICE)
+    # ic(start, goal, diff)
     # cond = np.array([next(p) for _ in range(20)])
     # xy = -0.25 + 0.5 * torch.rand(n_samples, 2).to(DEVICE)
     # th = -np.pi + 2 * np.pi * torch.rand(n_samples, 2).to(DEVICE)
@@ -185,7 +197,7 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
         z = (
             torch.randn((n_samples, 10)) if t > 1 else torch.zeros((n_samples, 10))
         ).to(DEVICE)
-        model_prediction = trained_model(x_t, start, goal, ts)
+        model_prediction = trained_model(x_t, start, goal, diff, ts)
         x_t = (
             1
             / alphas[t] ** 0.5
@@ -301,6 +313,7 @@ def trainRun(args):
     # ic(args)
     args = vars(args)
     # db = Database(filename="data.json")
+    data_0 = {}
     if args["generate"]:
         data = data_gen(args["trainingsize"])
         data_dict = {
@@ -322,21 +335,36 @@ def trainRun(args):
             "s_hidden": args["shidden"],
             "dim_action": data_0["action_dim"],
             # "dim_state": data_0["state_dim"],
-            "dim_state": 6,
+            "diff_in": True,
+            "dim_state": 3,
             "action_in": True,
             "action_out": True,
             "state_in": True,
             "state_out": False,
         }
         data = np.concatenate(
-            [data_0["actions"], data_0["start"], data_0["goal"]], axis=-1
+            [data_0["actions"], data_0["start"], data_0["goal"], data_0["diff"]],
+            axis=-1,
         )
         # data = data_0["actions"]
         # ic(data_0["actions"].shape)
         # breakpoint()
         # ic(data)
         ic(data.shape)
-
+    # for i in range(len(data_0["start"])):
+    #     st = data_0["start"][i]
+    #     stx = [st[0], st[0] + 0.1 * np.cos(st[2])]
+    #     sty = [st[1], st[1] + 0.1 * np.sin(st[2])]
+    #     gl = data_0["goal"][i]
+    #     df = data_0["diff"][i]
+    #     acts = data_0["actions"][i]
+    #     ic(st, gl, df, acts)
+    #     plt.scatter(0, 0, marker=".", color="red")
+    #     plt.plot(stx, sty, label="start")
+    #     plt.scatter(gl[0], gl[1], label="goal")
+    #     plt.scatter(df[0], df[1], label="diff")
+    #     plt.legend()
+    #     plt.show()
     # uuid = db.getUUID(data_dict)
     # data_dict["uuid"] = uuid
     # data_max = np.max(data[:, 3:], axis=0)
@@ -377,11 +405,14 @@ def trainRun(args):
     ax2.set_title("distribution of phi")
     plt.show()
     start = [0.0, 0.0, np.pi]
-    theta = np.linspace(-3 / 4 * np.pi, 3 / 4 * np.pi / 2, N_SAMPLES).reshape(-1, 1)
-    start_arr = np.concatenate([np.zeros((N_SAMPLES, 2)), theta], axis=1)
-    goal_arr = 0.25 * np.concatenate([np.cos(theta), np.sin(theta), theta], axis=1)
+    circle = circle_SO2(np.pi / 2, N_SAMPLES)
+    # theta = np.linspace(-3 / 4 * np.pi, 3 / 4 * np.pi / 2, N_SAMPLES).reshape(-1, 1)
+    # start_arr = np.concatenate([np.zeros((N_SAMPLES, 2)), theta], axis=1)
+    # goal_arr = 0.25 * np.concatenate([np.cos(theta), np.sin(theta), theta], axis=1)
+    start_arr = circle["start"]
+    goal_arr = circle["goal"]
     p = spiral_points()
-    n_plot = 5
+    n_plot = 10
     points = [next(p)]
     ic(points)
     indices = np.linspace(0, N_SAMPLES - 1, n_plot, dtype=int)
@@ -403,6 +434,7 @@ def trainRun(args):
     # points = np.array(points)
     # plt.plot(points[:, 0], points[:, 1], label="spiral")
     plt.legend()
+    plt.axis("equal")
     plt.show()
     sys.exit()
     pred = samples[:, :3]
