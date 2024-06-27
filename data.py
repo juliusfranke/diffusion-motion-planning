@@ -149,7 +149,7 @@ def circle_SO2(theta_range, n=100):
     theta = np.linspace(-theta_range, theta_range, n).reshape(-1, 1)
     start = np.concatenate([np.zeros((n, 2)), theta], axis=1)
     goal = np.concatenate([0.25 * np.cos(theta), 0.25 * np.sin(theta), theta], axis=1)
-    ic(start, goal, theta)
+    # ic(start, goal, theta)
     diff = np.array(
         [calc_diff_SO2(start_i, goal_i) for start_i, goal_i in zip(start, goal)]
     )
@@ -215,7 +215,7 @@ def read_yaml(path):
     return data_dict
 
 
-def spiral_points(arc=0.25, separation=0.5):
+def spiral_points(n=100, arc=0.25, separation=0.5):
     """generate points on an Archimedes' spiral
     with `arc` giving the length of arc between two points
     and `separation` giving the distance between consecutive
@@ -226,23 +226,34 @@ def spiral_points(arc=0.25, separation=0.5):
 
     def p2c(r, phi):
         """polar to cartesian"""
-        return (r * np.cos(phi), r * np.sin(phi), (phi + np.pi / 2) % (2 * np.pi))
+        return [r * np.cos(phi), r * np.sin(phi), (phi + np.pi / 2) % (2 * np.pi)]
 
     # yield a point at origin
-    yield (0, 0, 0)
-
+    states = []
+    diff = []
     # initialize the next point in the required distance
     r = arc
     b = separation / (2 * np.pi)
     # find the first phi to satisfy distance of `arc` to the second point
     phi = float(r) / b
-    while True:
-        yield p2c(r, phi)
+    for _ in range(n + 1):
+        next_state = p2c(r, phi)
+        states.append(next_state)
         # advance the variables
         # calculate phi that will give desired arc length at current radius
         # (approximating with circle)
         phi += float(arc) / r
         r = b * phi
+    states = np.array(states)
+    start = states[:-1]
+    goal = states[1:]
+
+    diff = np.array(
+        [calc_diff_SO2(start_i, goal_i) for start_i, goal_i in zip(start, goal)]
+    )
+    ic(len(start))
+    data = {"start": start, "goal": goal, "diff": diff}
+    return data
 
 
 if __name__ == "__main__":

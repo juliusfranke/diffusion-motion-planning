@@ -9,13 +9,14 @@ from data import (
     data_gen,
     car_val,
     gen_car_state_area,
+    metric,
     read_yaml,
     calc_unicycle_states,
     spiral_points,
     circle_SO2,
 )
+import time
 import matplotlib.pyplot as plt
-import shapely
 
 import sys
 from db import Database
@@ -25,7 +26,7 @@ import geopandas as gpd
 
 N_SEQ = 1_000
 EPOCHS = 200
-N_SAMPLES = 1_000
+N_SAMPLES = 20
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
@@ -123,6 +124,7 @@ def train(
         config["dim_state"] * config["state_out"]
         + config["dim_action"] * config["action_out"]
     )
+    time_start = time.time()
     for epoch in range(nepochs):
         for [data] in loader:
             data = data.to(DEVICE)
@@ -159,16 +161,22 @@ def train(
             loss.backward()
             optimizer.step()
 
-        if (epoch + 1) % 200 == 0:
+        if (epoch + 1) % 1000 == 0:
+            time_passed = time.time() - time_start
+            time_per_epoch = time_passed / (epoch + 1)
             mean_loss = np.mean(np.array(losses))
             losses = []
             # print("Epoch %d,\t Loss %f " % (epoch + 1, mean_loss))
-            ic(epoch + 1, mean_loss)
+            if time_per_epoch < 1:
+                epoch_per_second = 1 / time_per_epoch
+                ic(epoch + 1, mean_loss, epoch_per_second)
+            else:
+                ic(epoch + 1, mean_loss, time_per_epoch)
 
     return model
 
 
-def sample(trained_model, n_samples: int, n_steps: int = 100):
+def sample(trained_model, sample_data, n_samples: int, n_steps: int = 100):
     """Alg 2 from the DDPM paper."""
     x_t = torch.randn((n_samples, 10)).to(DEVICE)
 
@@ -177,10 +185,11 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
     # start = torch.Tensor(points[:n_samples])
     # goal = torch.Tensor(points[1:])
 
-    circle = circle_SO2(np.pi / 2, n_samples)
-    start = torch.Tensor(circle["start"]).to(DEVICE)
-    goal = torch.Tensor(circle["goal"]).to(DEVICE)
-    diff = torch.Tensor(circle["diff"]).to(DEVICE)
+    # sample_data = circle_SO2(np.pi / 2, n_samples)
+    # sample_data = spiral_points(n_samples)
+    start = torch.Tensor(sample_data["start"]).to(DEVICE)
+    goal = torch.Tensor(sample_data["goal"]).to(DEVICE)
+    diff = torch.Tensor(sample_data["diff"]).to(DEVICE)
     # ic(start, goal, diff)
     # cond = np.array([next(p) for _ in range(20)])
     # xy = -0.25 + 0.5 * torch.rand(n_samples, 2).to(DEVICE)
@@ -209,100 +218,59 @@ def sample(trained_model, n_samples: int, n_steps: int = 100):
     return x_t
 
 
-def main():
-    ic(DEVICE)
-    data = data_gen(N_SEQ)
-    data_max = np.max(data[:, 3:], axis=0)
-    data_min = np.min(data[:, 3:], axis=0)
-    # plt.show()
-    dataset = TensorDataset(torch.Tensor(data))
-    loader = DataLoader(dataset, batch_size=50, shuffle=True)
-    trained_model = train(loader, EPOCHS)
+def plotTraining(trainingData) -> None:
+    plt.scatter(trainingData[:, 0], trainingData[:, 1], label="training")
 
-    samples = sample(trained_model, N_SAMPLES).detach().cpu().numpy()
-    pred = samples[:, :3]
-    actions = samples[:, 3:]
-    max_actions = np.max(actions, axis=0)
-    min_actions = np.min(actions, axis=0)
-    for n_action in range(len(max_actions)):
-        pred_min = min_actions[n_action]
-        pred_max = max_actions[n_action]
-        action_min = data_min[n_action]
-        action_max = data_max[n_action]
 
-        ic(n_action, pred_min, action_min, pred_max, action_max)
+def plotSamples(samples, sample_data, n_plot: int = 5) -> None:
+    start_arr = sample_data["start"]
+    goal_arr = sample_data["goal"]
+    pred_goals = []
+    indices = np.linspace(0, N_SAMPLES - 1, n_plot, dtype=int)
+    for index in range(n_plot):
+        i = indices[index]
+        start = start_arr[i]
+        # ic(start)
+        # ic(samples[i])
+        state = calc_unicycle_states(samples[i], start=start)
+        pred_goals.append(state[-1])
+        # ic(state)
+        plt.scatter(goal_arr[i, 0], goal_arr[i, 1], label=f"goal{index}")
+        plt.plot(state[:, 0], state[:, 1], label=f"primitive {index}")
+    pred_goals = np.array(pred_goals)
+    # breakpoint()
+    mse = np.mean(metric(goal_arr, pred_goals))
+    ic(mse)
+    max = 1.1 * np.max(np.abs(np.concatenate([start_arr[:, :2], goal_arr[:, :2]])))
 
-    val = car_val(pred, actions)
-
-    max_error = np.max(val["error"])
-    min_error = np.min(val["error"])
-
-    error_sel = val["error"] >= val["mse"]
-
-    ic(val["mse"])
-    ic(max_error, min_error)
-
-    torch.save(trained_model.state_dict(), "model.pt")
-    xy_states = val["states"][:, :2][error_sel]
-    xy_pred = pred[:, :2][error_sel]
-    # ic(xy_states, xy_pred)
-    # plt.figure()
-    # forward = actions[:, 0] > 0
-    xy_states_poly = gen_car_state_area(60)
-    # ic(xy_states_poly[:10, :])
-    shape = shapely.Polygon(xy_states_poly)
-    # ic(shape.area)
-    plt.scatter(data[:, 0], data[:, 1], label="training")
-    # plt.figure()
-    g = gpd.GeoSeries(shape)
-    g.plot(alpha=0.2, color="blue")
-    # plt.plot(*zip(*xy_states_poly), label="test")
-    # plt.figure()
-    # plt.hist(val["error"])
-
-    # plt.figure()
-
-    plt.quiver(
-        xy_states[:, 0],
-        xy_states[:, 1],
-        xy_pred[:, 0] - xy_states[:, 0],
-        xy_pred[:, 1] - xy_states[:, 1],
-        # xy_pred[:, 0],
-        # xy_pred[:, 1],
-        label="error",
-        alpha=0.5,
-        scale=1,
-        scale_units="xy",
-        color="grey",
-    )
-    plt.axis("equal")
-    plt.scatter(
-        xy_states[:, 0],
-        xy_states[:, 1],
-        label="states",
-        alpha=0.7,
-        marker="+",
-        c="green",
-    )
-    plt.scatter(
-        xy_pred[:, 0],
-        xy_pred[:, 1],
-        label="prediction",
-        alpha=0.7,
-        marker="x",
-        c="orange",
-    )
-    plt.legend()
-    # plt.figure()
-    # plt.scatter(actions[:, 0], val["error"])
-    # plt.figure()
-    # plt.scatter(actions[:, 1], val["error"])
-
+    # breakpoint()
+    plt.xlim(-max, max)
+    plt.ylim(-max, max)
+    ax = plt.gca()
+    ax.set_aspect("equal", adjustable="box")
     plt.show()
 
 
-def plotTraining(trainingData) -> None:
-    plt.scatter(trainingData[:, 0], trainingData[:, 1], label="training")
+def plotHist(data_0, samples):
+    a_max = np.maximum(
+        np.max(samples[:, :2], axis=0), np.max(data_0["actions"][:, :2], axis=0)
+    )
+    a_min = np.minimum(
+        np.min(samples[:, :2], axis=0), np.min(data_0["actions"][:, :2], axis=0)
+    )
+    n_bins = 100
+    bins_s = np.linspace(np.floor(a_min[0]), np.ceil(a_max[0]), n_bins)
+    bins_phi = np.linspace(np.floor(a_min[1]), np.ceil(a_max[1]), n_bins)
+    fig, (ax1, ax2) = plt.subplots(2)
+    ax1.hist(data_0["actions"][:, 0], bins=bins_s, alpha=0.5, label="training data")
+    ax1.hist(samples[:, 0], bins=bins_s, alpha=0.5, label="predicted")
+    ax1.legend()
+    ax1.set_title("distribution of s")
+    ax2.hist(data_0["actions"][:, 1], bins=bins_phi, alpha=0.5, label="training data")
+    ax2.hist(samples[:, 1], bins=bins_phi, alpha=0.5, label="predicted")
+    ax2.legend()
+    ax2.set_title("distribution of phi")
+    plt.show()
 
 
 def plotError(errorData) -> None:
@@ -329,6 +297,8 @@ def trainRun(args):
         }
     else:
         data_0 = read_yaml(args["load"])
+        ic(args["nhidden"])
+        ic(args["shidden"])
         data_dict = {
             "type": "car",
             "n_hidden": args["nhidden"],
@@ -351,91 +321,28 @@ def trainRun(args):
         # breakpoint()
         # ic(data)
         ic(data.shape)
-    # for i in range(len(data_0["start"])):
-    #     st = data_0["start"][i]
-    #     stx = [st[0], st[0] + 0.1 * np.cos(st[2])]
-    #     sty = [st[1], st[1] + 0.1 * np.sin(st[2])]
-    #     gl = data_0["goal"][i]
-    #     df = data_0["diff"][i]
-    #     acts = data_0["actions"][i]
-    #     ic(st, gl, df, acts)
-    #     plt.scatter(0, 0, marker=".", color="red")
-    #     plt.plot(stx, sty, label="start")
-    #     plt.scatter(gl[0], gl[1], label="goal")
-    #     plt.scatter(df[0], df[1], label="diff")
-    #     plt.legend()
-    #     plt.show()
-    # uuid = db.getUUID(data_dict)
-    # data_dict["uuid"] = uuid
-    # data_max = np.max(data[:, 3:], axis=0)
-    # data_min = np.min(data[:, 3:], axis=0)
 
     dataset = TensorDataset(torch.Tensor(data))
     loader = DataLoader(dataset, batch_size=50, shuffle=True)
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    torch.save(trained_model.state_dict(), "unicycle_larger.pt")
-    samples = sample(trained_model, N_SAMPLES).detach().cpu().numpy()
-    # ic(samples)
-    # for s in samples:
-    #     ic(s)
-    #     for i in range(5):
-    #         ic(s[i * 2 : i * 2 + 2])
+    # sample_data = circle_SO2(np.pi / 2, N_SAMPLES)
+    sample_data = spiral_points(N_SAMPLES)
+    samples = sample(trained_model, sample_data, N_SAMPLES).detach().cpu().numpy()
 
-    sample_state = calc_unicycle_states(samples[0])
-    ic(sample_state)
-    a_max = np.maximum(
-        np.max(samples[:, :2], axis=0), np.max(data_0["actions"][:, :2], axis=0)
-    )
-    a_min = np.minimum(
-        np.min(samples[:, :2], axis=0), np.min(data_0["actions"][:, :2], axis=0)
-    )
-    n_bins = 100
-    bins_s = np.linspace(np.floor(a_min[0]), np.ceil(a_max[0]), n_bins)
-    bins_phi = np.linspace(np.floor(a_min[1]), np.ceil(a_max[1]), n_bins)
-    fig, (ax1, ax2) = plt.subplots(2)
-    ax1.hist(data_0["actions"][:, 0], bins=bins_s, alpha=0.5, label="training data")
-    ax1.hist(samples[:, 0], bins=bins_s, alpha=0.5, label="predicted")
-    ax1.legend()
-    ax1.set_title("distribution of s")
-    ax2.hist(data_0["actions"][:, 1], bins=bins_phi, alpha=0.5, label="training data")
-    ax2.hist(samples[:, 1], bins=bins_phi, alpha=0.5, label="predicted")
-    ax2.legend()
-    ax2.set_title("distribution of phi")
-    plt.show()
-    start = [0.0, 0.0, np.pi]
-    circle = circle_SO2(np.pi / 2, N_SAMPLES)
-    # theta = np.linspace(-3 / 4 * np.pi, 3 / 4 * np.pi / 2, N_SAMPLES).reshape(-1, 1)
-    # start_arr = np.concatenate([np.zeros((N_SAMPLES, 2)), theta], axis=1)
-    # goal_arr = 0.25 * np.concatenate([np.cos(theta), np.sin(theta), theta], axis=1)
-    start_arr = circle["start"]
-    goal_arr = circle["goal"]
-    p = spiral_points()
-    n_plot = 10
-    points = [next(p)]
-    ic(points)
-    indices = np.linspace(0, N_SAMPLES - 1, n_plot, dtype=int)
-    for index in range(n_plot):
-        i = indices[index]
-        start = start_arr[i]
-        # goal = goal_arr[i]
-        ic(start)
-        ic(samples[i])
-        state = calc_unicycle_states(samples[i], start=start)
-        ic(state)
-        # start = next(p)
-        # points.append(start)
-        # start = state[-1]
-        plt.scatter(goal_arr[i, 0], goal_arr[i, 1], label=f"goal{index}")
-        plt.plot(state[:, 0], state[:, 1], label=f"primitive {index}")
+    # sample_state = calc_unicycle_states(samples[0])
+    # ic(sample_state)
+    plotSamples(samples, sample_data, N_SAMPLES)
 
-    # plt.scatter(goal_arr[:n_plot, 0], goal_arr[:n_plot, 1], label="goals")
-    # points = np.array(points)
-    # plt.plot(points[:, 0], points[:, 1], label="spiral")
-    plt.legend()
-    plt.axis("equal")
-    plt.show()
+    sample_data = circle_SO2(np.pi * 2 / 3, N_SAMPLES)
+    samples = sample(trained_model, sample_data, N_SAMPLES).detach().cpu().numpy()
+    plotSamples(samples, sample_data, N_SAMPLES)
+    print("Save ?")
+    if input() == "y":
+        print("input filename")
+        name = input()
+        torch.save(trained_model.state_dict(), name)
     sys.exit()
     pred = samples[:, :3]
     actions = samples[:, 3:]
