@@ -1,6 +1,9 @@
+from pathlib import Path
 import numpy as np
-from typing import List
+import pandas as pd
+from typing import Dict, List
 from icecream import ic
+from shapely import is_empty
 import yaml
 import matplotlib.pyplot as plt
 from sklearn.utils import shuffle
@@ -172,14 +175,35 @@ def calc_diff_SO2(start, goal):
     return np.array([*(M_T @ (goal[:2] - start[:2])), phi])
 
 
-def read_yaml(path):
+def read_yaml(path: Path, **kwargs: int):
+    supported_kwargs = ["start", "goal", "actions", "states", "diff", "theta_0"]
+    assert set(kwargs.keys()) <= set(supported_kwargs)
+
     with open(path, "r") as file:
         data = yaml.safe_load(file)
-    states = []
-    actions = []
-    start = []
-    goal = []
-    diff = []
+    # data_df = pd.DataFrame(data)
+
+    return_data = np.array([])
+    for key, value in kwargs.items():
+        if key in supported_kwargs[:4]:
+            key_data = np.array([np.array(mp[key]).flatten() for mp in data])
+            assert key_data.shape[1] == value
+            if not return_data.size:
+                return_data = key_data
+            else:
+                return_data = np.concatenate([return_data, key_data], axis=-1)
+        elif key in 
+    breakpoint()
+
+    # states = np.array([np.array(mp["states"]).flatten() for mp in data])
+    # actions = np.array([np.array(mp["actions"]).flatten() for mp in data])
+    # start = np.array([mp["start"] for mp in data])
+    # goal = np.array([mp["goal"] for mp in data])
+    # diff = []
+
+    # [(start.append(mp["start"]), goal.append(mp["goal"]), actions.append(mp["actions"]), states.extend(mp["states"]) )for mp in data]
+    # start, goal, actions, states = np.array([(mp["start"], mp["goal"], mp["actions"], mp["states"]) for mp in data]).T
+    breakpoint()
     # ic(data)
     for sample in data:
         # offset = np.array([*np.random.uniform(-10, 10, 2), 0])
@@ -202,7 +226,7 @@ def read_yaml(path):
 
     states, actions, start, goal, diff = shuffle(states, actions, start, goal, diff)
     # print(states)
-    ic(start.shape, goal.shape)
+    ic(start.shape, goal.shape, states.shape, actions.shape, diff.shape)
     data_dict = {
         "states": states,
         "actions": actions,
