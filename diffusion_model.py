@@ -22,7 +22,6 @@ import sys
 from db import Database
 
 # import alphashape
-import geopandas as gpd
 
 N_SEQ = 1_000
 EPOCHS = 200
@@ -33,67 +32,28 @@ DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 class Net(nn.Module):
     def __init__(self, config: Dict):
         super().__init__()
-        # self.diff_in = config["diff_in"]
-        # self.state_in = config["state_in"]
-        # self.theta_0_in = config["theta_0_in"]
-        # self.theta_0_out = config["theta_0_out"]
-        self.input = config["input"]
-        self.conditioning = config["conditioning"]
+        self.input: Dict[str, int] = config["regular"]
+        self.conditioning: Dict[str, int] = config["conditioning"]
         self.validate: Dict[str, int] = self.input | self.conditioning
 
         self.output_size = sum(self.input.values())
-
-        self.input_size = self.output_size + sum(self.conditioning.values()) + 1
+        self.condition_size = sum(self.conditioning.values())
+        self.input_size = self.output_size + self.condition_size + 1
 
         ic(self.input_size, self.output_size)
-        layers = [
-            nn.Linear(self.input_size, config["s_hidden"])
-        ]  # Change this to 6 if you want to use the fourier embeddings of t
+        layers = [nn.Linear(self.input_size, config["s_hidden"])]
         for _ in range(config["n_hidden"]):
             layers.append(nn.Linear(config["s_hidden"], config["s_hidden"]))
         layers.append(nn.Linear(config["s_hidden"], self.output_size))
         self.linears = nn.ModuleList(layers)
 
         for layer in self.linears:
-            # init using kaiming
             nn.init.kaiming_uniform_(layer.weight)
 
-    def validate_input(self, **kwargs: torch.Tensor) -> bool:
-        return kwargs.keys() == self.validate.keys()
+    def forward(self, x, t):
+        # x = torch.concat([tensor for tensor in args], dim=-1)
+        x = torch.concat([x, t], dim=-1)
 
-    def forward(
-        self,
-        **kwargs: torch.Tensor,
-        # x: torch.Tensor,
-        # start: torch.Tensor,
-        # goal: torch.Tensor,
-        # diff: torch.Tensor,
-        # t: torch.Tensor,
-    ):
-        x = torch.concat([tensor for tensor in kwargs.values()], dim=-1)
-        # if self.diff_in:
-        #     x = torch.concat([x, diff, t], dim=-1)
-        # elif self.state_in:
-        #     x = torch.concat([x, start, goal, t], dim=-1)
-        # else:
-        #     x = torch.concat([x, t], dim=-1)
-
-        # Optional: Use Fourier feature embeddings for t, cf. transformers
-        # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
-        # ic(x.shape, start.shape, goal.shape, t.shape)
-
-        # diff_xy = goal[:, :2] - start[:, :2]
-        # # pos_diff =
-        # a = (goal[:, 2] - start[:, 2]) % (2 * np.pi)
-        # b = (start[:, 2] - goal[:, 2]) % (2 * np.pi)
-        # diff_theta = -a * (a < b) + b * (b <= a)
-        # diff_theta = diff_theta.reshape(-1, 1)
-        # breakpoint()
-        # diff = torch.concat([diff_xy, diff_theta], dim=-1)
-        # diff_theta = goal[:, :2] - start[:, :2]
-        # x = torch.concat([x, diff, t], dim=-1)
-        # ic(x.shape)
-        # breakpoint()
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
         return self.linears[-1](x)
@@ -128,19 +88,13 @@ def train(
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     alpha_bars, _ = get_alpha_betas(denoising_steps)  # Precompute alphas
     losses = []
-    output_size = (
-        config["dim_state"] * config["state_out"]
-        + config["dim_action"] * config["action_out"]
-    )
     time_start = time.time()
+
+    output_size = model.output_size
     for epoch in range(nepochs):
+        # ic(epoch)
         for [data] in loader:
             data = data.to(DEVICE)
-            start = data[:, 10:13]
-            goal = data[:, 13:16]
-            diff = data[:, 16:]
-            data = data[:, :10]
-            data = torch.concat([data, start[:, 2].reshape(-1, 1)], dim=-1)
             optimizer.zero_grad()
 
             # Fwd pass
@@ -162,9 +116,9 @@ def train(
             model_in = (
                 alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
             )  # Noise corrupt the data (eq14)
-            out = model(model_in, start, goal, diff, t.unsqueeze(1).to(DEVICE))
+            out = model(model_in, t.unsqueeze(1).to(DEVICE))
             loss = torch.mean(
-                (noise[:, :11] - out) ** 2
+                (noise[:, :output_size] - out) ** 2
             )  # Compute loss on prediction (eq14)
             losses.append(loss.detach().cpu().numpy())
 
@@ -172,7 +126,7 @@ def train(
             loss.backward()
             optimizer.step()
 
-        if (epoch + 1) % 1000 == 0:
+        if (epoch + 1) % 20 == 0:
             time_passed = time.time() - time_start
             time_per_epoch = time_passed / (epoch + 1)
             mean_loss = np.mean(np.array(losses))
@@ -187,25 +141,14 @@ def train(
     return model
 
 
-def sample(trained_model, sample_data, n_samples: int, n_steps: int = 100):
+def sample(
+    trained_model: Net,
+    n_samples: int,
+    n_steps: int = 100,
+    conditioning: torch.Tensor | None = None,
+):
     """Alg 2 from the DDPM paper."""
-    x_t = torch.randn((n_samples, 11)).to(DEVICE)
-
-    # p = spiral_points()
-    # points = [next(p) for _ in range(n_samples + 1)]
-    # start = torch.Tensor(points[:n_samples])
-    # goal = torch.Tensor(points[1:])
-
-    circle = circle_SO2(np.pi / 2, n_samples)
-    start = torch.Tensor(circle["start"]).to(DEVICE)
-    goal = torch.Tensor(circle["goal"]).to(DEVICE)
-    diff = torch.Tensor(circle["diff"]).to(DEVICE)
-    # start = torch.randn((n_samples, 3)).to(DEVICE)
-    # ic(start, goal, diff)
-    # cond = np.array([next(p) for _ in range(20)])
-    # xy = -0.25 + 0.5 * torch.rand(n_samples, 2).to(DEVICE)
-    # th = -np.pi + 2 * np.pi * torch.rand(n_samples, 2).to(DEVICE)
-    # cond = torch.concat((xy, th), dim=-1)
+    x_t = torch.randn((n_samples, trained_model.output_size)).to(DEVICE)
 
     alpha_bars, betas = get_alpha_betas(n_steps)
     alphas = 1 - betas
@@ -214,20 +157,32 @@ def sample(trained_model, sample_data, n_samples: int, n_steps: int = 100):
         ab_t = alpha_bars[t] * torch.ones((n_samples, 1)).to(
             DEVICE
         )  # Tile the alpha to the number of samples
-        z_dim = 11
         z = (
-            torch.randn((n_samples, z_dim))
+            torch.randn((n_samples, trained_model.output_size))
             if t > 1
-            else torch.zeros((n_samples, z_dim))
+            else torch.zeros((n_samples, trained_model.output_size))
         ).to(DEVICE)
-        model_prediction = trained_model(x_t, start, goal, diff, ts)
-        x_t = (
-            1
-            / alphas[t] ** 0.5
-            * (x_t - betas[t] / (1 - ab_t) ** 0.5 * model_prediction)
-        )
-        x_t += betas[t] ** 0.5 * z
-        # x_t = torch.concat((x_t,), dim=-1)
+
+        if trained_model.condition_size != 0 and isinstance(conditioning, torch.Tensor):
+            model_prediction = trained_model(x_t, conditioning, ts)
+            x_t = (
+                1
+                / alphas[t] ** 0.5
+                * (
+                    x_t[:, : trained_model.output_size]
+                    - betas[t] / (1 - ab_t) ** 0.5 * model_prediction
+                )
+            )
+            x_t += betas[t] ** 0.5 * z
+            x_t = torch.concat([x_t, conditioning], dim=-1)
+        else:
+            model_prediction = trained_model(x_t, ts)
+            x_t = (
+                1
+                / alphas[t] ** 0.5
+                * (x_t - betas[t] / (1 - ab_t) ** 0.5 * model_prediction)
+            )
+            x_t += betas[t] ** 0.5 * z
 
     return x_t
 
@@ -265,25 +220,43 @@ def plotSamples(samples, sample_data, n_plot: int = 5) -> None:
     plt.show()
 
 
-def plotHist(data_0, samples):
-    a_max = np.maximum(
-        np.max(samples[:, :2], axis=0), np.max(data_0["actions"][:, :2], axis=0)
-    )
-    a_min = np.minimum(
-        np.min(samples[:, :2], axis=0), np.min(data_0["actions"][:, :2], axis=0)
-    )
-    n_bins = 100
-    bins_s = np.linspace(np.floor(a_min[0]), np.ceil(a_max[0]), n_bins)
-    bins_phi = np.linspace(np.floor(a_min[1]), np.ceil(a_max[1]), n_bins)
-    fig, (ax1, ax2) = plt.subplots(2)
-    ax1.hist(data_0["actions"][:, 0], bins=bins_s, alpha=0.5, label="training data")
-    ax1.hist(samples[:, 0], bins=bins_s, alpha=0.5, label="predicted")
-    ax1.legend()
-    ax1.set_title("distribution of s")
-    ax2.hist(data_0["actions"][:, 1], bins=bins_phi, alpha=0.5, label="training data")
-    ax2.hist(samples[:, 1], bins=bins_phi, alpha=0.5, label="predicted")
-    ax2.legend()
-    ax2.set_title("distribution of phi")
+def plotHist(data: np.ndarray, samples: np.ndarray):
+    data_actions = data[:, :10].reshape(data.shape[0] * 5, 2)
+    sample_actions = samples[:, :10].reshape(samples.shape[0] * 5, 2)
+
+    data_s = data_actions[:, 0]
+    data_phi = data_actions[:, 1]
+    data_theta_0 = data[:, 10]
+
+    sample_s = sample_actions[:, 0]
+    sample_phi = sample_actions[:, 1]
+    sample_theta_0 = samples[:, 10]
+    sample_list = [sample_s, sample_phi, sample_theta_0]
+    data_list = [data_s, data_phi, data_theta_0]
+
+    n_bins = 50
+    titles = ["s", "phi", "theta_0"]
+    fig, ax = plt.subplots(3)
+    for i in range(3):
+        breakpoint()
+        data_current = data_list[i]
+        sample_current = sample_list[i]
+
+        bins = np.linspace(
+            np.floor(np.min(data_current)), np.ceil(np.max(data_current)), n_bins
+        )
+        ax[i].hist(
+            data_current,
+            bins=bins,
+            alpha=0.5,
+            label="training data",
+            density=True,
+        )
+        ax[i].hist(
+            sample_current, bins=bins, alpha=0.5, label="predicted", density=True
+        )
+        ax[i].legend()
+        ax[i].set_title(f"distribution of {titles[i]}")
     plt.show()
 
 
@@ -293,10 +266,7 @@ def plotError(errorData) -> None:
 
 def trainRun(args):
     ic(DEVICE)
-    # ic(args)
     args = vars(args)
-    # db = Database(filename="data.json")
-    data_0 = {}
     if args["generate"]:
         data = data_gen(args["trainingsize"])
         data_dict = {
@@ -313,32 +283,20 @@ def trainRun(args):
             # "theta_0_out":True,
         }
     else:
-        data_0 = read_yaml(args["load"], actions=10,states=18, theta_0=1)
         data_dict = {
             "type": "car",
             "n_hidden": args["nhidden"],
             "s_hidden": args["shidden"],
-            # "dim_action": data_0["action_dim"],
-            # "dim_state": data_0["state_dim"],
-            "diff_in": False,
-            "dim_action": 10,
-            "dim_state": 3,
-            "action_in": True,
-            "action_out": True,
-            "state_in": False,
-            "state_out": False,
-            "theta_0_in": True,
-            "theta_0_out": True,
-            "input": {"actions": 10, "theta_0": 1},
+            "regular": {"actions": 10, "theta_0": 1},
             "conditioning": {},
         }
-        data = np.concatenate(
-            [data_0["actions"], data_0["start"], data_0["goal"], data_0["diff"]],
-            axis=-1,
+        data = read_yaml(
+            args["load"], **data_dict["regular"], **data_dict["conditioning"]
         )
 
         ic(data.shape)
 
+    # breakpoint()
     dataset = TensorDataset(torch.Tensor(data))
     loader = DataLoader(dataset, batch_size=50, shuffle=True)
 
@@ -352,40 +310,10 @@ def trainRun(args):
     #     for i in range(5):
     #         ic(s[i * 2 : i * 2 + 2])
 
-    sample_state = calc_unicycle_states(samples[0, :10])
-    ic(sample_state)
-    a_max = np.maximum(
-        np.max(samples[:, :2], axis=0), np.max(data_0["actions"][:, :2], axis=0)
-    )
-    a_min = np.minimum(
-        np.min(samples[:, :2], axis=0), np.min(data_0["actions"][:, :2], axis=0)
-    )
-    n_bins = 100
-    bins_s = np.linspace(np.floor(a_min[0]), np.ceil(a_max[0]), n_bins)
-    bins_phi = np.linspace(np.floor(a_min[1]), np.ceil(a_max[1]), n_bins)
-    fig, (ax1, ax2) = plt.subplots(2)
-    ax1.hist(
-        data_0["actions"][:, 0],
-        bins=bins_s,
-        alpha=0.5,
-        label="training data",
-        density=True,
-    )
-    ax1.hist(samples[:, 0], bins=bins_s, alpha=0.5, label="predicted", density=True)
-    ax1.legend()
-    ax1.set_title("distribution of s")
-    ax2.hist(
-        data_0["actions"][:, 1],
-        bins=bins_phi,
-        alpha=0.5,
-        label="training data",
-        density=True,
-    )
-    ax2.hist(samples[:, 1], bins=bins_phi, alpha=0.5, label="predicted", density=True)
-    ax2.legend()
-    ax2.set_title("distribution of phi")
-    plt.show()
+    # sample_state = calc_unicycle_states(samples[0, :10])
+    # ic(sample_state)
     # start = [0.0, 0.0, np.pi]
+    plotHist(data, samples)
     circle = circle_SO2(np.pi / 2, N_SAMPLES)
     start_arr = circle["start"]
     goal_arr = circle["goal"]

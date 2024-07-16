@@ -160,83 +160,59 @@ def circle_SO2(theta_range, n=100):
     return data
 
 
-def calc_diff_SO2(start, goal):
-    start = np.array(start)
-    goal = np.array(goal)
-    rot = -start[2]
-    phi = goal[2] + rot
-    # print(rot, phi)
-    M_T = np.array(
-        [
-            [np.cos(rot), -np.sin(rot)],
-            [np.sin(rot), np.cos(rot)],
-        ]
-    )
-    return np.array([*(M_T @ (goal[:2] - start[:2])), phi])
+def calc_diff_SO2(start: np.ndarray, goal: np.ndarray) -> np.ndarray:
+    def diff(start: np.ndarray, goal: np.ndarray) -> np.ndarray:
+        rot = -start[2]
+        phi = goal[2] + rot
+        # print(rot, phi)
+        M_T = np.array(
+            [
+                [np.cos(rot), -np.sin(rot)],
+                [np.sin(rot), np.cos(rot)],
+            ]
+        )
+        return np.array([*(M_T @ (goal[:2] - start[:2])), phi])
+
+    if len(goal.shape) == 1:
+        return diff(start, goal)
+    else:
+        return np.array([diff(s, g) for s, g in zip(start, goal)])
 
 
-def read_yaml(path: Path, **kwargs: int):
+def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
     supported_kwargs = ["start", "goal", "actions", "states", "diff", "theta_0"]
-    assert set(kwargs.keys()) <= set(supported_kwargs)
+    assert (
+        set(kwargs.keys()) <= set(supported_kwargs)
+    ), f"{[key for key in kwargs.keys() if key not in supported_kwargs]} are/is not implemented"
 
     with open(path, "r") as file:
         data = yaml.safe_load(file)
-    # data_df = pd.DataFrame(data)
 
-    return_data = np.array([])
+    return_array = np.array([])
+    key_data = np.array([])
+
     for key, value in kwargs.items():
         if key in supported_kwargs[:4]:
             key_data = np.array([np.array(mp[key]).flatten() for mp in data])
-            assert key_data.shape[1] == value
-            if not return_data.size:
-                return_data = key_data
-            else:
-                return_data = np.concatenate([return_data, key_data], axis=-1)
-        elif key in 
-    breakpoint()
+        elif key == "diff":
+            start = np.array([np.array(mp["start"]).flatten() for mp in data])
+            goal = np.array([np.array(mp["goal"]).flatten() for mp in data])
+            # breakpoint()
+            key_data = calc_diff_SO2(start, goal)
+        elif key == "theta_0":
+            key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
+                -1, 1
+            )
+        else:
+            raise NotImplementedError
 
-    # states = np.array([np.array(mp["states"]).flatten() for mp in data])
-    # actions = np.array([np.array(mp["actions"]).flatten() for mp in data])
-    # start = np.array([mp["start"] for mp in data])
-    # goal = np.array([mp["goal"] for mp in data])
-    # diff = []
+        assert key_data.shape[1] == value
+        if not return_array.size:
+            return_array = key_data
+        else:
+            return_array = np.concatenate([return_array, key_data], axis=-1)
 
-    # [(start.append(mp["start"]), goal.append(mp["goal"]), actions.append(mp["actions"]), states.extend(mp["states"]) )for mp in data]
-    # start, goal, actions, states = np.array([(mp["start"], mp["goal"], mp["actions"], mp["states"]) for mp in data]).T
-    breakpoint()
-    # ic(data)
-    for sample in data:
-        # offset = np.array([*np.random.uniform(-10, 10, 2), 0])
-        offset = 0
-        start_i = np.array(sample["start"])
-        goal_i = np.array(sample["goal"])
-        start.append(start_i + offset)
-        goal.append(goal_i + offset)
-
-        diff.append(calc_diff_SO2(start_i, goal_i))
-        sample_state = np.array(sample["states"]) + offset
-        states.append([st for sts in sample_state for st in sts])
-        actions.append([ac for acs in sample["actions"] for ac in acs])
-    states = np.array(states)
-    actions = np.array(actions)
-    diff = np.array(diff)
-    # breakpoint()
-    start = np.array(start)
-    goal = np.array(goal)
-
-    states, actions, start, goal, diff = shuffle(states, actions, start, goal, diff)
-    # print(states)
-    ic(start.shape, goal.shape, states.shape, actions.shape, diff.shape)
-    data_dict = {
-        "states": states,
-        "actions": actions,
-        "start": start,
-        "goal": goal,
-        "diff": diff,
-        "state_dim": len(states[0]),
-        "action_dim": len(actions[0]),
-    }
-    return data_dict
+    return return_array
 
 
 def spiral_points(n=100, arc=0.25, separation=0.5):
