@@ -16,14 +16,6 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("-l", "--list", action="store_true", help="list trained models")
-    # Plots
-    displayParserGroup = parser.add_argument_group("display")
-    displayParserGroup.add_argument(
-        "-pt", "--plot-training", action="store_true", help="plot training set"
-    )
-    displayParserGroup.add_argument(
-        "-pe", "--plot-error", action="store_true", help="plot sampling error"
-    )
 
     subparsers = parser.add_subparsers()
 
@@ -45,14 +37,6 @@ def main():
         default=1000,
         metavar="AMOUNT",
         help="size of training dataset",
-    )
-    trainModelParser.add_argument(
-        "-s",
-        "--samples",
-        type=int,
-        default=1000,
-        metavar="AMOUNT",
-        help="amount of samples to generate",
     )
     trainModelParser.add_argument(
         "-nh",
@@ -79,24 +63,57 @@ def main():
     loadModelParser = subparsers.add_parser("load", help="load model from file")
     loadModelParser.set_defaults(fn="loadRun")
     loadModelParser.add_argument(
-        "file", type=isFile, metavar="FILE", help="file to load"
+        "model", type=isFile, metavar="MODEL", help="file to load"
+    )
+    loadModelParser.add_argument("load", type=isFile, metavar="FILE", help="training data file")
+    loadModelParser.add_argument(
+        "-s",
+        "--samples",
+        type=int,
+        default=1000,
+        metavar="AMOUNT",
+        help="amount of samples to generate",
+    )
+    loadModelParser.add_argument(
+        "-ph", "--plot-hist", action="store_true", help="plot histogram of actions"
+    )
+
+    # Export motion primitives
+    exportParser = subparsers.add_parser("export", help="export motion primitives")
+    exportParser.set_defaults(fn="export")
+    exportParser.add_argument(
+        "model", type=isFile, metavar="MODEL", help="file to load"
+    )
+    exportParser.add_argument(
+        "-s",
+        "--samples",
+        type=int,
+        default=1000,
+        metavar="AMOUNT",
+        help="amount of samples to generate",
     )
 
     args = parser.parse_args()
 
     if args.list:
-        from diffusion_model import listRun
+        from model_runner import listRun
 
         listRun()
     elif args.fn == "trainRun":
-        from diffusion_model import trainRun
+        from model_runner import trainRun
 
+        args = vars(args)
         trainRun(args)
-    elif "loadRun":
-        from diffusion_model import loadRun
+    elif args.fn == "loadRun":
+        from model_runner import loadRun
 
+        args = vars(args)
         loadRun(args)
+    elif args.fn == "export":
+        from model_runner import export
 
+        args = vars(args) 
+        export(args)
 
 if __name__ == "__main__":
     main()

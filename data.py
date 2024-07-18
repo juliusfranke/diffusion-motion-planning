@@ -19,18 +19,24 @@ def calc_unicycle_states(
 ):
     x, y, theta = start
     # ic(x, y, theta)
-    actions = actions.reshape(5, 2)
+    # if actions.shape != (5,2):
+    #     actions = actions.reshape(5, 2)
+    # ic(x,y,theta)
+    if theta > 1:
+        ic(theta)
     states = [start]
     for s, phi in actions:
+        # ic(s,phi)
         dx = dt * s * np.cos(theta)
         dy = dt * s * np.sin(theta)
         dtheta = dt * phi
 
+        # breakpoint()
         x += dx
         y += dy
         theta += dtheta
+        # breakpoint()
         states.append([x, y, theta])
-
     return np.array(states)
 
 
