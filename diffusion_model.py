@@ -153,7 +153,9 @@ def sample(
         ).to(DEVICE)
 
         if trained_model.condition_size != 0 and isinstance(conditioning, torch.Tensor):
-            model_prediction = trained_model(x_t, conditioning, ts)
+            conditioning = conditioning.reshape(-1,1)
+            # breakpoint()
+            model_prediction = trained_model(torch.concat([x_t, conditioning], dim=-1), ts)
             x_t = (
                 1
                 / alphas[t] ** 0.5
@@ -163,7 +165,7 @@ def sample(
                 )
             )
             x_t += betas[t] ** 0.5 * z
-            x_t = torch.concat([x_t, conditioning], dim=-1)
+            # x_t = torch.concat([x_t, conditioning], dim=-1)
         else:
             model_prediction = trained_model(x_t, ts)
             x_t = (
