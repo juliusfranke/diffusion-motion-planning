@@ -234,7 +234,12 @@ def export(args: Dict) -> None:
         outputList.append(tempDict)
 
     # breakpoint()
-    with open("output/unicycle_alcove.yaml", "w") as file:
+    # ic(len(outputList))
+    if args["out"] is None:
+        out = f"output/model_unicycle_bugtrap_n{length}_l5.yaml"
+    else:
+        out = args["out"]
+    with open(out, "w") as file:
         yaml.safe_dump(outputList, file, default_flow_style=None)
 
 

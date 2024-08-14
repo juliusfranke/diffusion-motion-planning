@@ -92,6 +92,13 @@ def main():
         metavar="AMOUNT",
         help="amount of samples to generate",
     )
+    exportParser.add_argument(
+        "-o",
+        "--out",
+        type=str,
+        default=None,
+        metavar="OUT",
+        help="file to output to")
 
     args = parser.parse_args()
 
