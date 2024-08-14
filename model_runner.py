@@ -10,12 +10,15 @@ import sys
 from torch.utils.data import DataLoader, TensorDataset
 from typing import Dict
 from data import (
+    WeightSampler,
     calc_unicycle_states,
     circle_SO2,
     data_gen,
     metric,
+    pruneDataset,
     read_yaml,
     spiral_points,
+    prune,
 )
 from diffusion_model import DEVICE, Net, sample, train
 
@@ -87,9 +90,15 @@ def plotHist(data: np.ndarray, samples: np.ndarray):
             alpha=0.5,
             label="training data",
             density=True,
+            stacked=True,
         )
         ax[i].hist(
-            sample_current, bins=bins, alpha=0.5, label="predicted", density=True
+            sample_current,
+            bins=bins,
+            alpha=0.5,
+            label="predicted",
+            density=True,
+            stacked=True,
         )
         ax[i].legend()
         ax[i].set_title(f"distribution of {titles[i]}")
@@ -113,7 +122,7 @@ def outputToDict(modelOutput: np.ndarray, dataDict: Dict) -> Dict[str, np.ndarra
                 sampleSize, 5, 2
             )
         else:
-            returnDict[outputType] = modelOutput[:,idx : idx + length]
+            returnDict[outputType] = modelOutput[:, idx : idx + length]
         idx += length
     return returnDict
 
@@ -146,23 +155,28 @@ def trainRun(args: Dict):
             "n_hidden": args["nhidden"],
             "s_hidden": args["shidden"],
             "regular": {"actions": 10, "theta_0": 1},
-            "conditioning": {},
+            "conditioning": {"rel_probability": 1},
         }
         data = read_yaml(
             args["load"], **data_dict["regular"], **data_dict["conditioning"]
         )
 
     ic(data.shape)
+    # data = prune(data, 0.1)
+    ic(data.shape)
     dataset = TensorDataset(torch.Tensor(data))
-    dataset_split = torch.utils.data.random_split(
-        dataset, [training_size, data.shape[0] - training_size]
-    )[0]
+    if training_size < data.shape[0]:
+        dataset_split = torch.utils.data.random_split(
+            dataset, [training_size, data.shape[0] - training_size]
+        )[0]
+    else:
+        dataset_split = dataset
     ic(len(dataset_split))
     loader = DataLoader(dataset_split, batch_size=50, shuffle=True)
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    model_save = "alcove_unicycle.pt"
+    model_save = "bugtrap_rel_logistic.pt"
     torch.save(trained_model.state_dict(), model_save)
     print(f"Model saved as {model_save}")
 
@@ -170,31 +184,40 @@ def trainRun(args: Dict):
 def loadRun(args: Dict):
     dataDict = {
         "type": "car",
-        "n_hidden": 4,
+        "n_hidden": 6,
         "s_hidden": 256,
         "regular": {"actions": 10, "theta_0": 1},
-        "conditioning": {},
+        "conditioning": {"rel_probability": 1},
     }
     model = loadModel(modelPath=Path(args["model"]), dataDict=dataDict)
-    samples = sample(model, args["samples"]).detach().cpu().numpy()
+    ws = WeightSampler()
+    cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
+    samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
     data = read_yaml(args["load"], **dataDict["regular"], **dataDict["conditioning"])
+    ic(data.shape)
+    prunedData = prune(data, 0.1)
+    uniqueData = np.unique(data, axis=0)
+    ic(prunedData.shape)
+    ic(uniqueData.shape)
     plotHist(data, samples)
 
 
 def export(args: Dict) -> None:
-    ic(args)
+    # ic(args)
     dataDict = {
         "type": "car",
-        "n_hidden": 4,
+        "n_hidden": 6,
         "s_hidden": 256,
         "regular": {"actions": 10, "theta_0": 1},
-        "conditioning": {},
+        "conditioning": {"rel_probability": 1},
     }
     model = loadModel(modelPath=Path(args["model"]), dataDict=dataDict)
 
-    samples = sample(model, args["samples"]).detach().cpu().numpy()
+    ws = WeightSampler()
+    cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
+    samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
     sampleDict = outputToDict(samples, dataDict)
-    sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5, 0.5)
+    # sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5, 0.5)
     # s_min = np.min(sampleDict["actions"][:,:,0])
     # s_max = np.max(sampleDict["actions"][:,:,0])
     # phi_min = np.min(sampleDict["actions"][:,:,1])
@@ -203,8 +226,15 @@ def export(args: Dict) -> None:
     # breakpoint()
     dt = 0.1
     outputList = []
-    breakpoint()
-    for actions, theta_0 in zip(sampleDict["actions"], sampleDict["theta_0"]):
+    # breakpoint()
+    # statesCheck = []
+    # ic(args["samples"])
+    length = args["samples"]
+    dataset, limit = pruneDataset(
+        sampleDict["actions"], sampleDict["theta_0"], length=length
+    )
+    # breakpoint()
+    for actions, states in dataset:
         tempDict = {
             "actions": actions.tolist(),
             "time_stamp": 0,
@@ -222,7 +252,13 @@ def export(args: Dict) -> None:
             "x_bound_distance": 0,
             "u_bound_distance": 0,
         }
-        states = calc_unicycle_states(actions, dt=dt, start=[0, 0, float(theta_0)])
+        # states = calc_unicycle_states(actions, dt=dt, start=[0, 0, float(theta_0)])
+        # if statesCheck:
+        #     diff = np.linalg.norm(np.array(statesCheck) - states, axis=(1, 2))
+        #
+        #     if (diff < 0.2).any():
+        #         continue
+        # statesCheck.append(states)
         numStates = len(states)
         numActions = len(actions)
         tempDict["cost"] = numActions * dt
