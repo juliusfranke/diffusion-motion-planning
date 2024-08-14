@@ -7,11 +7,68 @@ from shapely import is_empty
 import yaml
 import matplotlib.pyplot as plt
 from sklearn.utils import shuffle
+from scipy import stats
 
 S_MIN = -1
 S_MAX = 2
 PHI_MIN = -np.pi / 3
 PHI_MAX = np.pi / 3
+
+
+class WeightSampler(stats.rv_continuous):
+    def __init__(self, xtol=1e-14, seed=None):
+        super().__init__(a=0, b=1, xtol=xtol, seed=seed)
+
+    def _cdf(self, x, *args):
+        # return 1 / (1 + (((1 - x) * 0.5) / (x * (1 - 0.5))) ** 2)
+        # return 1-np.exp(-5*x**2)
+        # return x**4
+        return x**10
+
+
+def pruneDataset(
+    actions_data: np.ndarray, theta_0_data: np.ndarray, length: int, dt: float = 0.1
+):
+    def prune(data, limit: float):
+        dataset = []
+        statesCheck = []
+        for actions, theta_0 in data:
+            states = calc_unicycle_states(actions, dt=dt, start=[0, 0, float(theta_0)])
+            if statesCheck:
+                diff = np.linalg.norm(np.array(statesCheck) - states, axis=(1, 2))
+                if (diff < limit).any():
+                    continue
+            statesCheck.append(states)
+            dataset.append([actions, states])
+        return dataset
+
+    original_length = len(actions_data)
+    if original_length == length:
+        return prune(zip(actions_data, theta_0_data), limit=0), 0
+    dataset = []
+    dataset = prune(zip(actions_data, theta_0_data), limit=0.1)
+    current_length = len(dataset)
+    limit: float = (length - original_length) / (
+        (current_length - original_length) / 0.1
+    )
+    scaling = 2
+    last_length = original_length
+    while True:
+        dataset = prune(zip(actions_data, theta_0_data), limit=limit)
+        current_length = len(dataset)
+    
+        ic(current_length, limit)
+        if current_length == length:
+            break
+        elif current_length < length:
+            limit *= 1 - scaling * np.abs(current_length - length) / original_length
+        else:
+            limit *= 1 + scaling * np.abs(current_length - length) / original_length
+        if np.abs(current_length - length) < 2 and current_length != last_length:
+            scaling *= 0.95
+        last_length = current_length
+        
+    return dataset, limit
 
 
 def calc_unicycle_states(
@@ -22,8 +79,6 @@ def calc_unicycle_states(
     # if actions.shape != (5,2):
     #     actions = actions.reshape(5, 2)
     # ic(x,y,theta)
-    if theta > 1:
-        ic(theta)
     states = [start]
     for s, phi in actions:
         # ic(s,phi)
@@ -185,8 +240,29 @@ def calc_diff_SO2(start: np.ndarray, goal: np.ndarray) -> np.ndarray:
         return np.array([diff(s, g) for s, g in zip(start, goal)])
 
 
+def prune(data: np.ndarray, delta: float) -> np.ndarray:
+    returnList = []
+    for i in range(data.shape[0]):
+        entry = data[i, :]
+        if returnList:
+            diff = np.linalg.norm(np.array(returnList) - entry, axis=1)
+            if (diff <= delta).any():
+                continue
+        returnList.append(entry)
+
+    return np.array(returnList)
+
+
 def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
-    supported_kwargs = ["start", "goal", "actions", "states", "diff", "theta_0"]
+    supported_kwargs = [
+        "start",
+        "goal",
+        "actions",
+        "states",
+        "diff",
+        "theta_0",
+        "rel_probability",
+    ]
     assert (
         set(kwargs.keys()) <= set(supported_kwargs)
     ), f"{[key for key in kwargs.keys() if key not in supported_kwargs]} are/is not implemented"
@@ -196,6 +272,7 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
 
     return_array = np.array([])
     key_data = np.array([])
+    ws = WeightSampler()
 
     for key, value in kwargs.items():
         if key in supported_kwargs[:4]:
@@ -209,6 +286,10 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
             key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
                 -1, 1
             )
+        elif key == "rel_probability":
+            key_data = np.array([ws.cdf(mp[key]) for mp in data]).reshape(-1, 1)
+            # key_data = np.array([np.array(mp[key]).flatten() for mp in data])
+            # key_data = np.array([ws.cdf(cdf) for cdf in key_data])
         else:
             raise NotImplementedError
 
@@ -263,8 +344,16 @@ def spiral_points(n=100, arc=0.25, separation=0.5):
 
 
 if __name__ == "__main__":
-    data = circle_SO2(8)
-    ic(data)
+    # data = circle_SO2(8)
+    # ic(data)
+    ws = WeightSampler()
+    data = ws.rvs(size=1000)
+    plt.hist(data, density=True)
+    pts = np.linspace(0.001, 1)
+    plt.plot(pts, ws.pdf(pts), label="pdf")
+    plt.plot(pts, ws.cdf(pts), label="cdf")
+    plt.legend()
+    plt.show()
     # data = read_yaml("data/my_motions.bin.im.bin.sp.bin.yaml")
     # # s = []
     # phi_max = 0
