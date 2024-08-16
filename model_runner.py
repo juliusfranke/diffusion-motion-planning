@@ -1,4 +1,6 @@
 from pathlib import Path
+import pandas as pd
+import seaborn as sns
 import yaml
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,7 +10,7 @@ import torch.utils.data
 from icecream import ic
 import sys
 from torch.utils.data import DataLoader, TensorDataset
-from typing import Dict
+from typing import Dict, Tuple
 from data import (
     WeightSampler,
     calc_unicycle_states,
@@ -56,52 +58,43 @@ def plotSamples(samples, sample_data, n_samples=1000, n_plot: int = 5) -> None:
     plt.show()
 
 
-def plotHist(data: np.ndarray, samples: np.ndarray):
-    # TODO - get model output size and name from Net class
-    data_actions = data[:, :10].reshape(data.shape[0] * 5, 2)
-    sample_actions = samples[:, :10].reshape(samples.shape[0] * 5, 2)
+def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
+    action_length = dataDict["regular"]["actions"]
+    mp_length = action_length // 2
 
-    data_s = data_actions[:, 0]
-    data_phi = data_actions[:, 1]
-    data_theta_0 = data[:, 10]
+    data_actions_mean = np.mean(
+        data[:, :action_length].reshape(data.shape[0], mp_length, 2), axis=1
+    )
+    sample_actions_mean = np.mean(
+        samples[:, :action_length].reshape(samples.shape[0], mp_length, 2), axis=1
+    )
+    actions_mean = np.concatenate([data_actions_mean, sample_actions_mean])
 
-    sample_s = sample_actions[:, 0]
-    sample_phi = sample_actions[:, 1]
-    sample_theta_0 = samples[:, 10]
-    sample_list = [sample_s, sample_phi, sample_theta_0]
-    data_list = [data_s, data_phi, data_theta_0]
+    data_theta_0 = data[:, action_length]
+    sample_theta_0 = samples[:, action_length]
 
-    n_bins = 50
-    titles = ["s", "phi", "theta_0"]
-    fig, ax = plt.subplots(3)
-    for i in range(3):
-        data_current = data_list[i]
-        sample_current = sample_list[i]
+    # ws = WeightSampler()
+    # data_weights = ws.ppf(data[:, action_length+1])
+    data_weights = data[:, action_length+1]
+    pltdict = {
+        "s": actions_mean[:,0].flatten(),
+        "phi": actions_mean[:,1].flatten(),
+        "theta_0": np.concatenate([data_theta_0, sample_theta_0]).flatten(),
+        "weights": data_weights.tolist() + samples.shape[0] * [1],
+        "source": data.shape[0] * ["training data"] + samples.shape[0] * ["predicted"],
+    }
+    pltdf = pd.DataFrame(pltdict)
+    # breakpoint()
+    sns.set_theme()
+    # breakpoint()
+    # sns.displot(pltdf, x="s", y="phi", hue="source", kind="kde", thresh=0.2, levels=4)
+    g = sns.PairGrid(pltdf, hue="source", corner=True,vars=["s", "phi", "theta_0"])
+    # g = sns.PairGrid(pltdf, hue="source", corner=True)
+    # g.map_upper(sns.histplot)
+    g.map_diag(sns.histplot, element="poly", common_norm=False, stat="percent", weights=pltdf["weights"],bins=50)
+    g.map_lower(sns.kdeplot, levels=4, common_norm=False, weights=pltdf["weights"])
+    g.add_legend()
 
-        bins = np.linspace(
-            np.floor(np.min(data_current)), np.ceil(np.max(data_current)), n_bins
-        )
-        # h, _bins= np.histogram(sample_current, bins=bins, density=True)
-        # width = bins[1]-bins[0]
-        # ax[i].bar(_bins[:-1]+width/2, h, label="HELLO", width=width)
-        ax[i].hist(
-            data_current,
-            bins=bins,
-            alpha=0.5,
-            label="training data",
-            density=True,
-            stacked=True,
-        )
-        ax[i].hist(
-            sample_current,
-            bins=bins,
-            alpha=0.5,
-            label="predicted",
-            density=True,
-            stacked=True,
-        )
-        ax[i].legend()
-        ax[i].set_title(f"distribution of {titles[i]}")
     plt.show()
 
 
