@@ -272,7 +272,6 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
 
     return_array = np.array([])
     key_data = np.array([])
-    ws = WeightSampler()
 
     for key, value in kwargs.items():
         if key in supported_kwargs[:4]:
@@ -287,9 +286,7 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
                 -1, 1
             )
         elif key == "rel_probability":
-            key_data = np.array([ws.cdf(mp[key]) for mp in data]).reshape(-1, 1)
-            # key_data = np.array([np.array(mp[key]).flatten() for mp in data])
-            # key_data = np.array([ws.cdf(cdf) for cdf in key_data])
+            key_data = np.array([np.array(mp[key]) for mp in data]).reshape(-1, 1)
         else:
             raise NotImplementedError
 
