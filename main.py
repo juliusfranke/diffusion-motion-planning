@@ -63,7 +63,7 @@ def main():
     loadModelParser = subparsers.add_parser("load", help="load model from file")
     loadModelParser.set_defaults(fn="loadRun")
     loadModelParser.add_argument(
-        "model", type=isFile, metavar="MODEL", help="file to load"
+        "model", type=str, metavar="MODEL", help="model name"
     )
     loadModelParser.add_argument("load", type=isFile, metavar="FILE", help="training data file")
     loadModelParser.add_argument(
@@ -82,7 +82,7 @@ def main():
     exportParser = subparsers.add_parser("export", help="export motion primitives")
     exportParser.set_defaults(fn="export")
     exportParser.add_argument(
-        "model", type=isFile, metavar="MODEL", help="file to load"
+        "model", type=str, metavar="MODEL", help="model name"
     )
     exportParser.add_argument(
         "-s",

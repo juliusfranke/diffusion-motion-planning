@@ -98,10 +98,19 @@ def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
     plt.show()
 
 
-def loadModel(modelPath: Path, dataDict: Dict) -> Net:
+def loadModel(modelName: str) -> Tuple[Net, Dict]:
+    modelPath = Path(__file__).parents[0] / "data" / "models" / modelName
+    weightsPath = modelPath.with_suffix(".pt")
+    configPath = modelPath.with_suffix(".yaml")
+
+    if not weightsPath.exists() and not configPath.exists():
+        raise FileNotFoundError
+
+    with open(configPath, "r") as file:
+        dataDict = yaml.safe_load(file)
     model = Net(dataDict)
-    model.load_state_dict(torch.load(modelPath))
-    return model
+    model.load_state_dict(torch.load(weightsPath))
+    return model, dataDict
 
 
 def outputToDict(modelOutput: np.ndarray, dataDict: Dict) -> Dict[str, np.ndarray]:
@@ -109,10 +118,9 @@ def outputToDict(modelOutput: np.ndarray, dataDict: Dict) -> Dict[str, np.ndarra
     idx = 0
     sampleSize = modelOutput.shape[0]
     for outputType, length in dataDict["regular"].items():
-        # breakpoint()
         if outputType == "actions":
             returnDict[outputType] = modelOutput[:, idx : idx + length].reshape(
-                sampleSize, 5, 2
+                sampleSize, length // 2, 2
             )
         else:
             returnDict[outputType] = modelOutput[:, idx : idx + length]
@@ -156,7 +164,6 @@ def trainRun(args: Dict):
 
     ic(data.shape)
     # data = prune(data, 0.1)
-    ic(data.shape)
     dataset = TensorDataset(torch.Tensor(data))
     if training_size < data.shape[0]:
         dataset_split = torch.utils.data.random_split(
@@ -169,42 +176,25 @@ def trainRun(args: Dict):
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    model_save = "bugtrap_rel_logistic.pt"
+    model_save = "data/models/parallelpark_l5.pt"
     torch.save(trained_model.state_dict(), model_save)
     print(f"Model saved as {model_save}")
 
 
 def loadRun(args: Dict):
-    dataDict = {
-        "type": "car",
-        "n_hidden": 6,
-        "s_hidden": 256,
-        "regular": {"actions": 10, "theta_0": 1},
-        "conditioning": {"rel_probability": 1},
-    }
-    model = loadModel(modelPath=Path(args["model"]), dataDict=dataDict)
+    model, dataDict = loadModel(modelName=args["model"])
     ws = WeightSampler()
     cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
+    # cdf = torch.Tensor(ws.ppf(np.linspace(0,1,args["samples"]))).to(DEVICE)
     samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
     data = read_yaml(args["load"], **dataDict["regular"], **dataDict["conditioning"])
     ic(data.shape)
-    prunedData = prune(data, 0.1)
-    uniqueData = np.unique(data, axis=0)
-    ic(prunedData.shape)
-    ic(uniqueData.shape)
-    plotHist(data, samples)
+    plotHist(data, samples, dataDict)
 
 
 def export(args: Dict) -> None:
     # ic(args)
-    dataDict = {
-        "type": "car",
-        "n_hidden": 6,
-        "s_hidden": 256,
-        "regular": {"actions": 10, "theta_0": 1},
-        "conditioning": {"rel_probability": 1},
-    }
-    model = loadModel(modelPath=Path(args["model"]), dataDict=dataDict)
+    model, dataDict = loadModel(modelName=args["model"])
 
     ws = WeightSampler()
     cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
