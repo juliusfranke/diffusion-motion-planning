@@ -65,15 +65,13 @@ def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
     data_actions_mean = np.mean(
         data[:, :action_length].reshape(data.shape[0], mp_length, 2), axis=1
     )
-    sample_actions_mean = np.mean(
+    sample_actions_mean = np.clip(np.mean(
         samples[:, :action_length].reshape(samples.shape[0], mp_length, 2), axis=1
-    )
+    ),-0.5,0.5)
     actions_mean = np.concatenate([data_actions_mean, sample_actions_mean])
 
     data_theta_0 = data[:, action_length]
     sample_theta_0 = samples[:, action_length]
-    sample_theta_0[sample_theta_0 > np.pi] = sample_theta_0[sample_theta_0 > np.pi] - 2*np.pi
-    sample_theta_0[sample_theta_0 <= -np.pi] = sample_theta_0[sample_theta_0 <= -np.pi] + 2*np.pi
 
     # ws = WeightSampler()
     # data_weights = ws.ppf(data[:, action_length+1])
@@ -86,13 +84,11 @@ def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
         "source": data.shape[0] * ["training data"] + samples.shape[0] * ["predicted"],
     }
     pltdf = pd.DataFrame(pltdict)
-    # breakpoint()
+
     sns.set_theme()
-    # breakpoint()
-    # sns.displot(pltdf, x="s", y="phi", hue="source", kind="kde", thresh=0.2, levels=4)
+
     g = sns.PairGrid(pltdf, hue="source", corner=False,vars=["s", "phi", "theta_0"])
-    # g = sns.PairGrid(pltdf, hue="source", corner=True)
-    # g.map_upper(sns.histplot)
+
     g.map_diag(sns.histplot, element="poly", common_norm=False, stat="percent", weights=pltdf["weights"],bins=50)
     g.map_lower(sns.kdeplot, levels=4, common_norm=False, weights=pltdf["weights"])
     g.map_upper(sns.scatterplot, s=20,alpha=1, marker="x")
@@ -179,7 +175,7 @@ def trainRun(args: Dict):
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    model_save = "data/models/parallelpark_l5.pt"
+    model_save = "data/models/bugtrap_l5_new.pt"
     torch.save(trained_model.state_dict(), model_save)
     print(f"Model saved as {model_save}")
 
@@ -189,9 +185,11 @@ def loadRun(args: Dict):
     ws = WeightSampler()
     cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
     # cdf = torch.Tensor(ws.ppf(np.linspace(0,1,args["samples"]))).to(DEVICE)
+    # cdf = torch.Tensor(np.linspace(0,1,args["samples"])**10).to(DEVICE)
     samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
     data = read_yaml(args["load"], **dataDict["regular"], **dataDict["conditioning"])
     ic(data.shape)
+    samples[:,10] = np.mod(np.abs(samples[:,10]), np.pi) * np.sign(samples[:,10])
     plotHist(data, samples, dataDict)
 
 
