@@ -75,22 +75,15 @@ def calc_unicycle_states(
     actions: np.ndarray, dt: float = 0.1, start: List[float] = [0, 0, 0]
 ):
     x, y, theta = start
-    # ic(x, y, theta)
-    # if actions.shape != (5,2):
-    #     actions = actions.reshape(5, 2)
-    # ic(x,y,theta)
     states = [start]
     for s, phi in actions:
-        # ic(s,phi)
         dx = dt * s * np.cos(theta)
         dy = dt * s * np.sin(theta)
         dtheta = dt * phi
 
-        # breakpoint()
         x += dx
         y += dy
         theta += dtheta
-        # breakpoint()
         states.append([x, y, theta])
     return np.array(states)
 
@@ -279,7 +272,6 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
         elif key == "diff":
             start = np.array([np.array(mp["start"]).flatten() for mp in data])
             goal = np.array([np.array(mp["goal"]).flatten() for mp in data])
-            # breakpoint()
             key_data = calc_diff_SO2(start, goal)
         elif key == "theta_0":
             key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
@@ -296,6 +288,7 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
         else:
             return_array = np.concatenate([return_array, key_data], axis=-1)
 
+    return_array = return_array[return_array[:,-1] > return_array[:,-1].mean()/4]
     return return_array
 
 
@@ -341,8 +334,6 @@ def spiral_points(n=100, arc=0.25, separation=0.5):
 
 
 if __name__ == "__main__":
-    # data = circle_SO2(8)
-    # ic(data)
     ws = WeightSampler()
     data = ws.rvs(size=1000)
     plt.hist(data, density=True)
@@ -351,33 +342,3 @@ if __name__ == "__main__":
     plt.plot(pts, ws.cdf(pts), label="cdf")
     plt.legend()
     plt.show()
-    # data = read_yaml("data/my_motions.bin.im.bin.sp.bin.yaml")
-    # # s = []
-    # phi_max = 0
-    # phi_min = 0
-    # for actions in data["actions"]:
-    #     actions = actions.reshape(5, 2)
-    #     min = np.min(actions[:, 0])
-    #     max = np.max(actions[:, 0])
-    #     if min < phi_min:
-    #         phi_min = min
-    #     if max > phi_max:
-    #         phi_max = max
-
-    # ic(phi_min, phi_max)
-    # # breakpoint()
-    # for sample in data["states"]:
-    #     sample = sample.reshape(6, 3)
-    #     plt.plot(sample[:, 0], sample[:, 1])
-    # plt.show()
-
-    # p = spiral_points()
-    # points = np.array([next(p) for _ in range(20)])
-    # # ic(points)
-    # u = np.cos(points[:, 2])
-    # v = np.sin(points[:, 2])
-
-    # # ic(u, v)
-    # plt.plot(points[:, 0], points[:, 1])
-    # plt.quiver(points[:, 0], points[:, 1], u, v)
-    # plt.show()
