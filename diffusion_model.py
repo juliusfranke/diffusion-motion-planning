@@ -1,16 +1,12 @@
-# import torch
-import torch.utils.data
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-import numpy as np
-from typing import Dict
-from icecream import ic
 import time
-import matplotlib.pyplot as plt
+from typing import Dict
 
-import sys
-from db import Database
-
+import numpy as np
+import torch.nn as nn
+import torch.utils.data
+from icecream import ic
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 N_SEQ = 1_000
 EPOCHS = 200
@@ -38,14 +34,41 @@ class Net(nn.Module):
 
         for layer in self.linears:
             nn.init.kaiming_uniform_(layer.weight)
+        self.loss_fn = {"actions": self._loss_actions, "theta_0": self._loss_theta_0}
+
+    def loss(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        idx = 0
+        loss = torch.zeros(output.shape, device=DEVICE)
+        for key, value in self.input.items():
+            idx_to = value + idx
+            loss[:, idx:idx_to] = self.loss_fn[key](
+                output[:, idx:idx_to], noise[:, idx:idx_to]
+            )
+            idx += value
+        return torch.mean(loss)
 
     def forward(self, x, t):
-        # x = torch.concat([tensor for tensor in args], dim=-1)
         x = torch.concat([x, t], dim=-1)
 
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
         return self.linears[-1](x)
+
+    def _loss_actions(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        assert output.shape[1] == 10
+        assert noise.shape[1] == 10
+
+        return (noise - output) ** 2
+
+    def _loss_theta_0(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        assert output.shape[1] == 1
+        assert noise.shape[1] == 1
+
+        difference = noise - output
+        x = torch.cos(difference)
+        y = torch.sin(difference)
+
+        return (torch.atan2(y, x) / np.pi) ** 2
 
 
 def get_alpha_betas(N: int):
@@ -77,11 +100,11 @@ def train(
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     alpha_bars, _ = get_alpha_betas(denoising_steps)  # Precompute alphas
     losses = []
-    time_start = time.time()
 
     output_size = model.output_size
-    for epoch in range(nepochs):
-        # ic(epoch)
+    pbar = tqdm(range(nepochs))
+    mean_loss = 0
+    for epoch in pbar:
         for [data] in loader:
             data = data.to(DEVICE)
             optimizer.zero_grad()
@@ -95,10 +118,7 @@ def train(
                 .unsqueeze(1)
                 .to(DEVICE)
             )  # Get the alphas for each timestep
-            # ic(data.shape)
-            # ic(config["actions"].shape)
 
-            # breakpoint()
             noise = torch.randn(
                 *data.shape, device=DEVICE
             )  # Sample DIFFERENT random noise for each datapoint
@@ -109,23 +129,17 @@ def train(
             loss = torch.mean(
                 (noise[:, :output_size] - out) ** 2
             )  # Compute loss on prediction (eq14)
+            loss_new = model.loss(out, noise)
+            loss = loss_new
             losses.append(loss.detach().cpu().numpy())
 
             # Bwd pass
             loss.backward()
             optimizer.step()
 
-        if (epoch + 1) % 500 == 0:
-            time_passed = time.time() - time_start
-            time_per_epoch = time_passed / (epoch + 1)
+        if (epoch + 1) % 10 == 0:
             mean_loss = np.mean(np.array(losses))
-            losses = []
-            # print("Epoch %d,\t Loss %f " % (epoch + 1, mean_loss))
-            if time_per_epoch < 1:
-                epoch_per_second = 1 / time_per_epoch
-                ic(epoch + 1, mean_loss, epoch_per_second)
-            else:
-                ic(epoch + 1, mean_loss, time_per_epoch)
+            pbar.set_description(f"Mean loss = {mean_loss:.5f}")
 
     return model
 
@@ -153,9 +167,10 @@ def sample(
         ).to(DEVICE)
 
         if trained_model.condition_size != 0 and isinstance(conditioning, torch.Tensor):
-            conditioning = conditioning.reshape(-1,1)
-            # breakpoint()
-            model_prediction = trained_model(torch.concat([x_t, conditioning], dim=-1), ts)
+            conditioning = conditioning.reshape(-1, 1)
+            model_prediction = trained_model(
+                torch.concat([x_t, conditioning], dim=-1), ts
+            )
             x_t = (
                 1
                 / alphas[t] ** 0.5
@@ -165,7 +180,6 @@ def sample(
                 )
             )
             x_t += betas[t] ** 0.5 * z
-            # x_t = torch.concat([x_t, conditioning], dim=-1)
         else:
             model_prediction = trained_model(x_t, ts)
             x_t = (
