@@ -1,28 +1,24 @@
 from pathlib import Path
-import pandas as pd
-import seaborn as sns
-import yaml
+from typing import Dict, Tuple
+
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import ks_2samp
+import pandas as pd
+import seaborn as sns
 import torch
 import torch.utils.data
-from icecream import ic
-import sys
-from torch.utils.data import DataLoader, TensorDataset
-from typing import Dict, Tuple
+import yaml
 from data import (
     WeightSampler,
     calc_unicycle_states,
-    circle_SO2,
     data_gen,
     metric,
     pruneDataset,
     read_yaml,
-    spiral_points,
-    prune,
 )
 from diffusion_model import DEVICE, Net, sample, train
+from icecream import ic
+from torch.utils.data import DataLoader, TensorDataset
 
 
 def plotTraining(trainingData) -> None:
@@ -65,9 +61,13 @@ def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
     data_actions_mean = np.mean(
         data[:, :action_length].reshape(data.shape[0], mp_length, 2), axis=1
     )
-    sample_actions_mean = np.clip(np.mean(
-        samples[:, :action_length].reshape(samples.shape[0], mp_length, 2), axis=1
-    ),-0.5,0.5)
+    sample_actions_mean = np.clip(
+        np.mean(
+            samples[:, :action_length].reshape(samples.shape[0], mp_length, 2), axis=1
+        ),
+        -0.5,
+        0.5,
+    )
     actions_mean = np.concatenate([data_actions_mean, sample_actions_mean])
 
     data_theta_0 = data[:, action_length]
@@ -75,10 +75,10 @@ def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
 
     # ws = WeightSampler()
     # data_weights = ws.ppf(data[:, action_length+1])
-    data_weights = data[:, action_length+1]
+    data_weights = data[:, action_length + 1]
     pltdict = {
-        "s": actions_mean[:,0].flatten(),
-        "phi": actions_mean[:,1].flatten(),
+        "s": actions_mean[:, 0].flatten(),
+        "phi": actions_mean[:, 1].flatten(),
         "theta_0": np.concatenate([data_theta_0, sample_theta_0]).flatten(),
         "weights": data_weights.tolist() + samples.shape[0] * [1],
         "source": data.shape[0] * ["training data"] + samples.shape[0] * ["predicted"],
@@ -87,11 +87,18 @@ def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
 
     sns.set_theme()
 
-    g = sns.PairGrid(pltdf, hue="source", corner=False,vars=["s", "phi", "theta_0"])
+    g = sns.PairGrid(pltdf, hue="source", corner=False, vars=["s", "phi", "theta_0"])
 
-    g.map_diag(sns.histplot, element="poly", common_norm=False, stat="percent", weights=pltdf["weights"],bins=50)
+    g.map_diag(
+        sns.histplot,
+        element="poly",
+        common_norm=False,
+        stat="percent",
+        weights=pltdf["weights"],
+        bins=50,
+    )
     g.map_lower(sns.kdeplot, levels=4, common_norm=False, weights=pltdf["weights"])
-    g.map_upper(sns.scatterplot, s=20,alpha=1, marker="x")
+    g.map_upper(sns.scatterplot, s=20, alpha=1, marker="x")
     g.add_legend()
 
     plt.show()
@@ -155,7 +162,7 @@ def trainRun(args: Dict):
             "n_hidden": args["nhidden"],
             "s_hidden": args["shidden"],
             "regular": {"actions": 10, "theta_0": 1},
-            "conditioning": {"rel_probability": 1},
+            "conditioning": {"delta_0": 1, "rel_probability": 1},
         }
         data = read_yaml(
             args["load"], **data_dict["regular"], **data_dict["conditioning"]
@@ -175,7 +182,7 @@ def trainRun(args: Dict):
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    model_save = "data/models/bugtrap_l5_new.pt"
+    model_save = "data/models/bugtrap_l5_delta.pt"
     torch.save(trained_model.state_dict(), model_save)
     print(f"Model saved as {model_save}")
 
@@ -189,35 +196,44 @@ def loadRun(args: Dict):
     samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
     data = read_yaml(args["load"], **dataDict["regular"], **dataDict["conditioning"])
     ic(data.shape)
-    samples[:,10] = np.mod(np.abs(samples[:,10]), np.pi) * np.sign(samples[:,10])
+    samples[:, 10] = np.mod(np.abs(samples[:, 10]), np.pi) * np.sign(samples[:, 10])
     plotHist(data, samples, dataDict)
 
 
 def export(args: Dict) -> None:
-    # ic(args)
     model, dataDict = loadModel(modelName=args["model"])
 
     ws = WeightSampler()
-    cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
-    samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
-    sampleDict = outputToDict(samples, dataDict)
-    # sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5, 0.5)
-    # s_min = np.min(sampleDict["actions"][:,:,0])
-    # s_max = np.max(sampleDict["actions"][:,:,0])
-    # phi_min = np.min(sampleDict["actions"][:,:,1])
-    # phi_max = np.max(sampleDict["actions"][:,:,1])
+    if dataDict["conditioning"]:
+        conditioning = []
+        for condition, size in dataDict["conditioning"].items():
+            if condition == "rel_probability":
+                cond = torch.Tensor(
+                    ws.rvs(size=args["samples"]), device=DEVICE
+                ).reshape(-1, 1)
+            else:
+                cond = (
+                    torch.ones(size=(args["samples"], size), device=DEVICE)
+                    * args[condition]
+                )
+            conditioning.append(cond)
+        # conditioning = torch.concat([cdf, delta_0], dim=1)
+        conditioning = torch.concat(conditioning, dim=1)
+        samples = (
+            sample(model, args["samples"], conditioning=conditioning).detach().cpu().numpy()
+        )
+    else:
+        samples = (
+            sample(model, args["samples"]).detach().cpu().numpy()
+        )
 
-    # breakpoint()
+    sampleDict = outputToDict(samples, dataDict)
     dt = 0.1
     outputList = []
-    # breakpoint()
-    # statesCheck = []
-    # ic(args["samples"])
     length = args["samples"]
     dataset, limit = pruneDataset(
         sampleDict["actions"], sampleDict["theta_0"], length=length
     )
-    # breakpoint()
     for actions, states in dataset:
         tempDict = {
             "actions": actions.tolist(),
@@ -236,13 +252,6 @@ def export(args: Dict) -> None:
             "x_bound_distance": 0,
             "u_bound_distance": 0,
         }
-        # states = calc_unicycle_states(actions, dt=dt, start=[0, 0, float(theta_0)])
-        # if statesCheck:
-        #     diff = np.linalg.norm(np.array(statesCheck) - states, axis=(1, 2))
-        #
-        #     if (diff < 0.2).any():
-        #         continue
-        # statesCheck.append(states)
         numStates = len(states)
         numActions = len(actions)
         tempDict["cost"] = numActions * dt
@@ -259,14 +268,10 @@ def export(args: Dict) -> None:
         out = f"output/model_unicycle_bugtrap_n{length}_l5.yaml"
     else:
         out = args["out"]
+    Path(out).parents[0].mkdir(parents=True, exist_ok=True)
     with open(out, "w") as file:
         yaml.safe_dump(outputList, file, default_flow_style=None)
 
 
 def listRun():
     raise NotImplementedError
-
-
-#     db = Database("data.json")
-#     data = db.tabulate(keys=["uuid", "type", "s_hidden"])
-#     print(data)

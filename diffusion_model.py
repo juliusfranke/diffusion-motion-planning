@@ -167,7 +167,8 @@ def sample(
         ).to(DEVICE)
 
         if trained_model.condition_size != 0 and isinstance(conditioning, torch.Tensor):
-            conditioning = conditioning.reshape(-1, 1)
+            if conditioning.shape[1] < 2:
+                conditioning = conditioning.reshape(-1, 1)
             model_prediction = trained_model(
                 torch.concat([x_t, conditioning], dim=-1), ts
             )

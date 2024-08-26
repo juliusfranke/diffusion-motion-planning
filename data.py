@@ -254,6 +254,7 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
         "states",
         "diff",
         "theta_0",
+        "delta_0",
         "rel_probability",
     ]
     assert (
@@ -277,10 +278,10 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
             key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
                 -1, 1
             )
-        elif key == "rel_probability":
+        elif key in ["rel_probability", "delta_0"]:
             key_data = np.array([np.array(mp[key]) for mp in data]).reshape(-1, 1)
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"{key} is not implemented")
 
         assert key_data.shape[1] == value
         if not return_array.size:

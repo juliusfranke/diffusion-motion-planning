@@ -85,6 +85,13 @@ def main():
         "model", type=str, metavar="MODEL", help="model name"
     )
     exportParser.add_argument(
+        "-d",
+        "--delta",
+        type=float,
+        default=0.5,
+        metavar="DELTA",
+        help="delta_0")
+    exportParser.add_argument(
         "-s",
         "--samples",
         type=int,
