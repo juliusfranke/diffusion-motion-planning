@@ -86,7 +86,7 @@ def main():
     )
     exportParser.add_argument(
         "-d",
-        "--delta",
+        "--delta_0",
         type=float,
         default=0.5,
         metavar="DELTA",
@@ -107,6 +107,13 @@ def main():
         metavar="OUT",
         help="file to output to")
 
+    exportParser.add_argument(
+        "-i",
+        "--instance",
+        type=isFile,
+        default=None,
+        metavar="INSTANCE",
+        help="Path to extended instance yaml")
     args = parser.parse_args()
 
     if args.list:

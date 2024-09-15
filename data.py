@@ -56,7 +56,7 @@ def pruneDataset(
     while True:
         dataset = prune(zip(actions_data, theta_0_data), limit=limit)
         current_length = len(dataset)
-    
+
         ic(current_length, limit)
         if current_length == length:
             break
@@ -67,7 +67,7 @@ def pruneDataset(
         if np.abs(current_length - length) < 2 and current_length != last_length:
             scaling *= 0.95
         last_length = current_length
-        
+
     return dataset, limit
 
 
@@ -256,6 +256,8 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
         "theta_0",
         "delta_0",
         "rel_probability",
+        "area",
+        "area_blocked",
     ]
     assert (
         set(kwargs.keys()) <= set(supported_kwargs)
@@ -278,7 +280,7 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
             key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
                 -1, 1
             )
-        elif key in ["rel_probability", "delta_0"]:
+        elif key in ["rel_probability", "delta_0", "area", "area_blocked"]:
             key_data = np.array([np.array(mp[key]) for mp in data]).reshape(-1, 1)
         else:
             raise NotImplementedError(f"{key} is not implemented")
@@ -289,7 +291,7 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
         else:
             return_array = np.concatenate([return_array, key_data], axis=-1)
 
-    return_array = return_array[return_array[:,-1] > return_array[:,-1].mean()/4]
+    return_array = return_array[return_array[:, -1] > return_array[:, -1].mean() / 4]
     return return_array
 
 

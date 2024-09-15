@@ -162,7 +162,12 @@ def trainRun(args: Dict):
             "n_hidden": args["nhidden"],
             "s_hidden": args["shidden"],
             "regular": {"actions": 10, "theta_0": 1},
-            "conditioning": {"delta_0": 1, "rel_probability": 1},
+            "conditioning": {
+                "delta_0": 1,
+                "rel_probability": 1,
+                "area": 1,
+                "area_blocked": 1,
+            },
         }
         data = read_yaml(
             args["load"], **data_dict["regular"], **data_dict["conditioning"]
@@ -171,7 +176,7 @@ def trainRun(args: Dict):
     ic(data.shape)
     # data = prune(data, 0.1)
     dataset = TensorDataset(torch.Tensor(data))
-    if training_size < data.shape[0]:
+    if training_size < data.shape[0] and training_size != -1:
         dataset_split = torch.utils.data.random_split(
             dataset, [training_size, data.shape[0] - training_size]
         )[0]
@@ -182,7 +187,7 @@ def trainRun(args: Dict):
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    model_save = "data/models/bugtrap_l5_delta.pt"
+    model_save = "data/models/rand_env_l5.pt"
     torch.save(trained_model.state_dict(), model_save)
     print(f"Model saved as {model_save}")
 
@@ -205,12 +210,21 @@ def export(args: Dict) -> None:
 
     ws = WeightSampler()
     if dataDict["conditioning"]:
+        instance_path = args["instance"]
+        with open(instance_path, "r") as file:
+            instance_data = yaml.safe_load(file)["environment"]
+
         conditioning = []
         for condition, size in dataDict["conditioning"].items():
             if condition == "rel_probability":
                 cond = torch.Tensor(
                     ws.rvs(size=args["samples"]), device=DEVICE
                 ).reshape(-1, 1)
+            elif condition in instance_data.keys():
+                cond = (
+                    torch.ones(size=(args["samples"], size), device=DEVICE)
+                    * instance_data[condition]
+                )
             else:
                 cond = (
                     torch.ones(size=(args["samples"], size), device=DEVICE)
@@ -220,12 +234,13 @@ def export(args: Dict) -> None:
         # conditioning = torch.concat([cdf, delta_0], dim=1)
         conditioning = torch.concat(conditioning, dim=1)
         samples = (
-            sample(model, args["samples"], conditioning=conditioning).detach().cpu().numpy()
+            sample(model, args["samples"], conditioning=conditioning)
+            .detach()
+            .cpu()
+            .numpy()
         )
     else:
-        samples = (
-            sample(model, args["samples"]).detach().cpu().numpy()
-        )
+        samples = sample(model, args["samples"]).detach().cpu().numpy()
 
     sampleDict = outputToDict(samples, dataDict)
     dt = 0.1
