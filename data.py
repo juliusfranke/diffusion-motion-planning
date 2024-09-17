@@ -258,6 +258,16 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
         "rel_probability",
         "area",
         "area_blocked",
+        "area_free",
+        "avg_clustering",
+        "avg_node_connectivity",
+        "avg_shortest_path",
+        "avg_shortest_path_norm",
+        "env_width",
+        "env_height",
+        "mean_size",
+        "n_obstacles",
+        "p_obstacles",
     ]
     assert (
         set(kwargs.keys()) <= set(supported_kwargs)
@@ -268,6 +278,8 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
 
     return_array = np.array([])
     key_data = np.array([])
+    rel_idx = 0
+    # TODO rel_prob calculate by environment group
 
     for key, value in kwargs.items():
         if key in supported_kwargs[:4]:
@@ -280,18 +292,22 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
             key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
                 -1, 1
             )
-        elif key in ["rel_probability", "delta_0", "area", "area_blocked"]:
+        elif key in supported_kwargs[6:]:
             key_data = np.array([np.array(mp[key]) for mp in data]).reshape(-1, 1)
         else:
             raise NotImplementedError(f"{key} is not implemented")
 
+        if key == "rel_probability":
+            rel_idx = return_array.shape[1]
         assert key_data.shape[1] == value
         if not return_array.size:
             return_array = key_data
         else:
             return_array = np.concatenate([return_array, key_data], axis=-1)
 
-    return_array = return_array[return_array[:, -1] > return_array[:, -1].mean() / 4]
+    return_array = return_array[
+        return_array[:, rel_idx] > return_array[:, rel_idx].mean() / 4
+    ]
     return return_array
 
 

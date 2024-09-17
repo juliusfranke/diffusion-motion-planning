@@ -167,6 +167,8 @@ def trainRun(args: Dict):
                 "rel_probability": 1,
                 "area": 1,
                 "area_blocked": 1,
+                # "avg_node_connectivity": 1,
+                "avg_clustering": 1,
             },
         }
         data = read_yaml(
@@ -187,7 +189,7 @@ def trainRun(args: Dict):
 
     model = Net(data_dict)
     trained_model = train(model, loader, data_dict, args["epochs"])
-    model_save = "data/models/rand_env_l5.pt"
+    model_save = "data/models/rand_env_area_clust_l5.pt"
     torch.save(trained_model.state_dict(), model_save)
     print(f"Model saved as {model_save}")
 
