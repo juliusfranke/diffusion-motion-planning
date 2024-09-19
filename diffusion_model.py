@@ -26,10 +26,12 @@ class Net(nn.Module):
         self.input_size = self.output_size + self.condition_size + 1
 
         ic(self.input_size, self.output_size)
-        layers = [nn.Linear(self.input_size, config["s_hidden"])]
+        ic(self.input)
+        ic(self.conditioning)
+        layers = [nn.Linear(self.input_size, config["s_hidden"], dtype=torch.float64)]
         for _ in range(config["n_hidden"]):
-            layers.append(nn.Linear(config["s_hidden"], config["s_hidden"]))
-        layers.append(nn.Linear(config["s_hidden"], self.output_size))
+            layers.append(nn.Linear(config["s_hidden"], config["s_hidden"], dtype=torch.float64))
+        layers.append(nn.Linear(config["s_hidden"], self.output_size, dtype=torch.float64))
         self.linears = nn.ModuleList(layers)
 
         for layer in self.linears:
@@ -37,19 +39,20 @@ class Net(nn.Module):
         self.loss_fn = {"actions": self._loss_actions, "theta_0": self._loss_theta_0}
 
     def loss(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
-        idx = 0
-        loss = torch.zeros(output.shape, device=DEVICE)
-        for key, value in self.input.items():
-            idx_to = value + idx
-            loss[:, idx:idx_to] = self.loss_fn[key](
-                output[:, idx:idx_to], noise[:, idx:idx_to]
-            )
-            idx += value
-        return torch.mean(loss)
+        return torch.mean((noise[:,:self.output_size] - output) ** 2)
+        # idx = 0
+        # loss = torch.zeros(output.shape, device=DEVICE)
+        # for key, value in self.input.items():
+        #     idx_to = value + idx
+        #     loss[:, idx:idx_to] = self.loss_fn[key](
+        #         output[:, idx:idx_to], noise[:, idx:idx_to]
+        #     )
+        #     idx += value
+        # return torch.mean(loss)
 
     def forward(self, x, t):
         x = torch.concat([x, t], dim=-1)
-
+    
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
         return self.linears[-1](x)
@@ -63,12 +66,15 @@ class Net(nn.Module):
     def _loss_theta_0(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
         assert output.shape[1] == 1
         assert noise.shape[1] == 1
+        
 
         difference = noise - output
         x = torch.cos(difference)
         y = torch.sin(difference)
-
-        return (torch.atan2(y, x) / np.pi) ** 2
+        rel_dist = (torch.atan2(y, x) / np.pi) ** 2
+        # penalty = torch.gt(torch.abs(output), np.pi) * (torch.abs(output))**10
+        # rel_dist += penalty
+        return rel_dist 
 
 
 def get_alpha_betas(N: int):

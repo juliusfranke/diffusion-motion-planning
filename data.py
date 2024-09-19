@@ -14,6 +14,31 @@ S_MAX = 2
 PHI_MIN = -np.pi / 3
 PHI_MAX = np.pi / 3
 
+SUPP_REG = [
+        "start",
+        "goal",
+        "actions",
+        "states",
+    ]
+SUPP_ETC = [
+        "diff",
+        "theta_0",
+        "delta_0",
+    ]
+SUPP_ENV = [
+        "area",
+        "area_blocked",
+        "area_free",
+        "avg_clustering",
+        "avg_node_connectivity",
+        "avg_shortest_path",
+        "avg_shortest_path_norm",
+        "env_width",
+        "env_height",
+        "mean_size",
+        "n_obstacles",
+        "p_obstacles",
+    ]
 
 class WeightSampler(stats.rv_continuous):
     def __init__(self, xtol=1e-14, seed=None):
@@ -84,6 +109,7 @@ def calc_unicycle_states(
         x += dx
         y += dy
         theta += dtheta
+        theta = (theta + np.pi) % (2 * np.pi) - np.pi
         states.append([x, y, theta])
     return np.array(states)
 
@@ -246,43 +272,28 @@ def prune(data: np.ndarray, delta: float) -> np.ndarray:
     return np.array(returnList)
 
 
-def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
-    supported_kwargs = [
-        "start",
-        "goal",
-        "actions",
-        "states",
-        "diff",
-        "theta_0",
-        "delta_0",
-        "rel_probability",
-        "area",
-        "area_blocked",
-        "area_free",
-        "avg_clustering",
-        "avg_node_connectivity",
-        "avg_shortest_path",
-        "avg_shortest_path_norm",
-        "env_width",
-        "env_height",
-        "mean_size",
-        "n_obstacles",
-        "p_obstacles",
-    ]
+def read_yaml(path: Path, **kwargs: int) -> np.ndarray: 
+    supported_complete = SUPP_REG + SUPP_ETC + SUPP_ENV + ["rel_probability"]
     assert (
-        set(kwargs.keys()) <= set(supported_kwargs)
-    ), f"{[key for key in kwargs.keys() if key not in supported_kwargs]} are/is not implemented"
+        set(kwargs.keys()) <= set(supported_complete)
+    ), f"{[key for key in kwargs.keys() if key not in supported_complete]} are/is not implemented"
 
     with open(path, "r") as file:
         data = yaml.safe_load(file)
 
     return_array = np.array([])
+    return_df = {}
     key_data = np.array([])
     rel_idx = 0
-    # TODO rel_prob calculate by environment group
+    header = []
 
-    for key, value in kwargs.items():
-        if key in supported_kwargs[:4]:
+    for key in supported_complete:
+        if key not in kwargs.keys():
+            continue
+        else:
+            value = kwargs[key]
+        print(f"Adding {key}")
+        if key in SUPP_REG:
             key_data = np.array([np.array(mp[key]).flatten() for mp in data])
         elif key == "diff":
             start = np.array([np.array(mp["start"]).flatten() for mp in data])
@@ -292,22 +303,61 @@ def read_yaml(path: Path, **kwargs: int) -> np.ndarray:
             key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
                 -1, 1
             )
-        elif key in supported_kwargs[6:]:
+        elif key in SUPP_ENV + SUPP_ETC:
             key_data = np.array([np.array(mp[key]) for mp in data]).reshape(-1, 1)
+        elif key == "rel_probability":
+            key_data = np.array([np.array(mp["count"]) for mp in data]).reshape(-1, 1)
+            key = "count"
         else:
             raise NotImplementedError(f"{key} is not implemented")
 
-        if key == "rel_probability":
-            rel_idx = return_array.shape[1]
+        
         assert key_data.shape[1] == value
+        if value != 1:
+            header = header + [f"{key}_{i}" for i in range(value)]
+        else:
+            header.append(key)
         if not return_array.size:
             return_array = key_data
         else:
             return_array = np.concatenate([return_array, key_data], axis=-1)
+        #return_df[key] = key_data
+    df = pd.DataFrame(return_array, columns= header)
+    header_dupe = header
+    if "count" in header_dupe:
+        header_dupe.remove("count")
+        df = df.groupby(header_dupe, as_index=False).agg({'count': 'sum'})
+    else:
+        df.drop_duplicates(inplace=True)
+    if "rel_probability" in kwargs.keys():
+        env_group = [env_key for env_key in SUPP_ENV if env_key in kwargs.keys()]
+        ic(env_group)
 
-    return_array = return_array[
-        return_array[:, rel_idx] > return_array[:, rel_idx].mean() / 4
-    ]
+        if env_group:
+            df["group_total"] = df.groupby(env_group)["count"].transform("max")
+        else:
+            df["group_total"] = df["count"].max()
+        df['rel_probability'] = df['count'] / df['group_total']
+        selector = np.zeros(len(df))
+        selector[::2] = 1
+        df["selector"] = selector
+        # df.drop(df[(df.rel_probability < df.rel_probability.mean()) & (df.selector == 1)].index, inplace=True)
+        df.drop(columns=["count", "group_total", "selector"], inplace=True)
+    # else:
+    #     selector = np.zeros(len(df))
+    #     selector[::4] = 1
+    #     df["selector"] = selector
+    #     df.drop(df[df.selector == 1].index, inplace=True)
+
+    return_array = df.to_numpy()
+    ic(df.columns)
+    ic(df.min())
+    ic(df.max())
+        
+    
+    #return_array = return_array[
+    #    return_array[:, rel_idx] > return_array[:, rel_idx].mean() / 4
+    #]
     return return_array
 
 

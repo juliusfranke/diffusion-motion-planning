@@ -15,6 +15,8 @@ from data import (
     metric,
     pruneDataset,
     read_yaml,
+    SUPP_ETC,
+    SUPP_ENV,
 )
 from diffusion_model import DEVICE, Net, sample, train
 from icecream import ic
@@ -24,6 +26,15 @@ from torch.utils.data import DataLoader, TensorDataset
 def plotTraining(trainingData) -> None:
     plt.scatter(trainingData[:, 0], trainingData[:, 1], label="training")
 
+def getViolations(samples):
+    samples = samples[:,:10]
+    is_violation = np.abs(samples) > 0.5
+    
+    total_violations = np.sum(is_violation)
+    total = np.prod(samples.shape)
+    violations = total_violations / total
+    violation_score = np.sum(is_violation * (np.abs(samples[:,:10])-0.5)) / total
+    return violations, violation_score
 
 def plotSamples(samples, sample_data, n_samples=1000, n_plot: int = 5) -> None:
     start_arr = sample_data["start"]
@@ -115,7 +126,9 @@ def loadModel(modelName: str) -> Tuple[Net, Dict]:
     with open(configPath, "r") as file:
         dataDict = yaml.safe_load(file)
     model = Net(dataDict)
-    model.load_state_dict(torch.load(weightsPath))
+    model.load_state_dict(torch.load(weightsPath,weights_only=True))
+    model.to(DEVICE)
+    
     return model, dataDict
 
 
@@ -158,15 +171,16 @@ def trainRun(args: Dict):
         }
     else:
         data_dict = {
-            "type": "car",
+            "type": "unicycle1_v0",
             "n_hidden": args["nhidden"],
             "s_hidden": args["shidden"],
             "regular": {"actions": 10, "theta_0": 1},
             "conditioning": {
-                "delta_0": 1,
+                # "delta_0": 1,
                 "rel_probability": 1,
-                "area": 1,
-                "area_blocked": 1,
+                # "area": 1,
+                # "env_width": 1,
+                # "area_blocked": 1,
                 # "avg_node_connectivity": 1,
                 "avg_clustering": 1,
             },
@@ -177,7 +191,7 @@ def trainRun(args: Dict):
 
     ic(data.shape)
     # data = prune(data, 0.1)
-    dataset = TensorDataset(torch.Tensor(data))
+    dataset = TensorDataset(torch.tensor(data, device=DEVICE))
     if training_size < data.shape[0] and training_size != -1:
         dataset_split = torch.utils.data.random_split(
             dataset, [training_size, data.shape[0] - training_size]
@@ -185,13 +199,21 @@ def trainRun(args: Dict):
     else:
         dataset_split = dataset
     ic(len(dataset_split))
-    loader = DataLoader(dataset_split, batch_size=50, shuffle=True)
-
+    loader = DataLoader(dataset_split, batch_size=1024, shuffle=True)
+    
     model = Net(data_dict)
+    
+    
     trained_model = train(model, loader, data_dict, args["epochs"])
-    model_save = "data/models/rand_env_area_clust_l5.pt"
-    torch.save(trained_model.state_dict(), model_save)
-    print(f"Model saved as {model_save}")
+    model_path = Path("data/models/rand_env_clust_l5.pt")
+    if model_path.exists():
+        if input("Already exists, overwrite? (y/n)") != 'y':
+            return None
+    torch.save(trained_model.state_dict(), model_path)
+    with open(model_path.with_suffix(".yaml"), "w") as file:
+        yaml.safe_dump(data_dict, file, default_flow_style=None)
+    
+    print(f"Model saved as {model_path}")
 
 
 def loadRun(args: Dict):
@@ -217,34 +239,85 @@ def export(args: Dict) -> None:
             instance_data = yaml.safe_load(file)["environment"]
 
         conditioning = []
-        for condition, size in dataDict["conditioning"].items():
-            if condition == "rel_probability":
-                cond = torch.Tensor(
-                    ws.rvs(size=args["samples"]), device=DEVICE
-                ).reshape(-1, 1)
-            elif condition in instance_data.keys():
+        for condition in SUPP_ETC + SUPP_ENV:
+            if condition not in dataDict["conditioning"].keys():
+                continue
+            else:
+                size = dataDict["conditioning"][condition]
+            print(f"Adding {condition}")
+            #if condition == "rel_probability":
+            #    cond = torch.tensor(
+            #        ws.rvs(size=args["samples"]), device=DEVICE
+            #    ).reshape(-1, 1)
+            if condition in instance_data.keys():
                 cond = (
-                    torch.ones(size=(args["samples"], size), device=DEVICE)
+                    torch.ones(size=(args["samples"], size), device=DEVICE, dtype=torch.float64)
                     * instance_data[condition]
                 )
+                print(instance_data[condition])
             else:
                 cond = (
-                    torch.ones(size=(args["samples"], size), device=DEVICE)
+                    torch.ones(size=(args["samples"], size), device=DEVICE, dtype=torch.float64)
                     * args[condition]
                 )
+                print(args[condition])
             conditioning.append(cond)
+        if "rel_probability" in dataDict["conditioning"].keys():
+            print("Adding rel_probability")
+            conditioning.append(torch.tensor(
+                    ws.rvs(size=args["samples"]), device=DEVICE
+                    ).reshape(-1, 1))
         # conditioning = torch.concat([cdf, delta_0], dim=1)
-        conditioning = torch.concat(conditioning, dim=1)
+        conditioning = torch.concat(conditioning, dim=1).to(DEVICE)
+        # samples = (
+        #         sample(model, args["samples"], conditioning=conditioning)
+        #         .detach()
+        #         .cpu()
+        #         .numpy()
+        #     )
+        # breakpoint()
         samples = (
-            sample(model, args["samples"], conditioning=conditioning)
-            .detach()
-            .cpu()
-            .numpy()
-        )
+                sample(model, args["samples"], conditioning=conditioning)
+                .detach()
+                .cpu()
+                .numpy()
+            )
+        # samples = []
+        # best_score = np.inf
+        # best_steps = None
+        
+        # for steps in [50, 100, 150, 200, 250, 300, 350, 400]:
+        #     samples_ = (
+        #         sample(model, args["samples"], conditioning=conditioning,n_steps=steps)
+        #         .detach()
+        #         .cpu()
+        #         .numpy()
+        #     )
+        #     violations, violation_score = getViolations(samples_)
+        #     score = violation_score * violations
+        #     print(f"{steps} steps : {violation_score} * {violations} = {score}" )
+        #     if score < best_score:
+        #         samples = samples_
+        #         best_score = score
+        #         best_steps = steps
+            
     else:
         samples = sample(model, args["samples"]).detach().cpu().numpy()
-
+    # print(f"Best steps: {best_steps} with {best_score}")
+    # breakpoint()
+    violations, violation_score = getViolations(samples)
+    score = violation_score * violations
+    print(f"{violation_score} * {violations} = {score}" )
     sampleDict = outputToDict(samples, dataDict)
+    sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5,0.5)
+    # breakpoint()
+    # sampleDict["theta_0"] = np.sign(sampleDict["theta_0"]) * np.abs(sampleDict["theta_0"]) % np.pi
+    
+    ic(max(sampleDict["theta_0"]))
+    ic(min(sampleDict["theta_0"]))
+    sampleDict["theta_0"] = (sampleDict["theta_0"] + np.pi) % (2 * np.pi) - np.pi
+    ic(max(sampleDict["theta_0"]))
+    ic(min(sampleDict["theta_0"]))
     dt = 0.1
     outputList = []
     length = args["samples"]
