@@ -1,8 +1,10 @@
 import argparse
-import sys
 import os
-from icecream import ic
+import sys
+import logging
+
 # from diffusion_model import trainRun, loadRun
+logger = logging.getLogger(__name__)
 
 
 def isFile(string: str):
@@ -62,10 +64,10 @@ def main():
     # Loading model
     loadModelParser = subparsers.add_parser("load", help="load model from file")
     loadModelParser.set_defaults(fn="loadRun")
+    loadModelParser.add_argument("model", type=str, metavar="MODEL", help="model name")
     loadModelParser.add_argument(
-        "model", type=str, metavar="MODEL", help="model name"
+        "load", type=isFile, metavar="FILE", help="training data file"
     )
-    loadModelParser.add_argument("load", type=isFile, metavar="FILE", help="training data file")
     loadModelParser.add_argument(
         "-s",
         "--samples",
@@ -81,16 +83,10 @@ def main():
     # Export motion primitives
     exportParser = subparsers.add_parser("export", help="export motion primitives")
     exportParser.set_defaults(fn="export")
+    exportParser.add_argument("model", type=str, metavar="MODEL", help="model name")
     exportParser.add_argument(
-        "model", type=str, metavar="MODEL", help="model name"
+        "-d", "--delta_0", type=float, default=0.5, metavar="DELTA", help="delta_0"
     )
-    exportParser.add_argument(
-        "-d",
-        "--delta_0",
-        type=float,
-        default=0.5,
-        metavar="DELTA",
-        help="delta_0")
     exportParser.add_argument(
         "-s",
         "--samples",
@@ -100,12 +96,8 @@ def main():
         help="amount of samples to generate",
     )
     exportParser.add_argument(
-        "-o",
-        "--out",
-        type=str,
-        default=None,
-        metavar="OUT",
-        help="file to output to")
+        "-o", "--out", type=str, default=None, metavar="OUT", help="file to output to"
+    )
 
     exportParser.add_argument(
         "-i",
@@ -113,7 +105,8 @@ def main():
         type=isFile,
         default=None,
         metavar="INSTANCE",
-        help="Path to extended instance yaml")
+        help="Path to extended instance yaml",
+    )
     args = parser.parse_args()
 
     if args.list:
@@ -133,8 +126,14 @@ def main():
     elif args.fn == "export":
         from model_runner import export
 
-        args = vars(args) 
+        args = vars(args)
         export(args)
 
+
 if __name__ == "__main__":
+    logging.basicConfig(
+        stream=sys.stdout,
+        level=logging.INFO,
+        format="%(levelname)s - %(name)s - %(message)s",
+    )
     main()

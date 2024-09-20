@@ -10,59 +10,31 @@ import torch.utils.data
 import yaml
 from data import (
     WeightSampler,
-    calc_unicycle_states,
-    data_gen,
-    metric,
     pruneDataset,
-    read_yaml,
-    SUPP_ETC,
-    SUPP_ENV,
+    load_dataset,
+    SUPP_COMPLETE,
 )
 from diffusion_model import DEVICE, Net, sample, train
 from icecream import ic
 from torch.utils.data import DataLoader, TensorDataset
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def plotTraining(trainingData) -> None:
     plt.scatter(trainingData[:, 0], trainingData[:, 1], label="training")
 
+
 def getViolations(samples):
-    samples = samples[:,:10]
+    samples = samples[:, :10]
     is_violation = np.abs(samples) > 0.5
-    
+
     total_violations = np.sum(is_violation)
     total = np.prod(samples.shape)
     violations = total_violations / total
-    violation_score = np.sum(is_violation * (np.abs(samples[:,:10])-0.5)) / total
+    violation_score = np.sum(is_violation * (np.abs(samples[:, :10]) - 0.5)) / total
     return violations, violation_score
-
-def plotSamples(samples, sample_data, n_samples=1000, n_plot: int = 5) -> None:
-    start_arr = sample_data["start"]
-    goal_arr = sample_data["goal"]
-    pred_goals = []
-    indices = np.linspace(0, n_samples - 1, n_plot, dtype=int)
-    for index in range(n_plot):
-        i = indices[index]
-        start = start_arr[i]
-        # ic(start)
-        # ic(samples[i])
-        state = calc_unicycle_states(samples[i], start=start)
-        pred_goals.append(state[-1])
-        # ic(state)
-        plt.scatter(goal_arr[i, 0], goal_arr[i, 1], label=f"goal{index}")
-        plt.plot(state[:, 0], state[:, 1], label=f"primitive {index}")
-    pred_goals = np.array(pred_goals)
-    # breakpoint()
-    mse = np.mean(metric(goal_arr, pred_goals))
-    ic(mse)
-    max = 1.1 * np.max(np.abs(np.concatenate([start_arr[:, :2], goal_arr[:, :2]])))
-
-    # breakpoint()
-    plt.xlim(-max, max)
-    plt.ylim(-max, max)
-    ax = plt.gca()
-    ax.set_aspect("equal", adjustable="box")
-    plt.show()
 
 
 def plotHist(data: np.ndarray, samples: np.ndarray, dataDict: Dict):
@@ -126,9 +98,9 @@ def loadModel(modelName: str) -> Tuple[Net, Dict]:
     with open(configPath, "r") as file:
         dataDict = yaml.safe_load(file)
     model = Net(dataDict)
-    model.load_state_dict(torch.load(weightsPath,weights_only=True))
+    model.load_state_dict(torch.load(weightsPath, weights_only=True))
     model.to(DEVICE)
-    
+
     return model, dataDict
 
 
@@ -152,23 +124,10 @@ def plotError(errorData) -> None:
 
 
 def trainRun(args: Dict):
-    ic(DEVICE)
+    logger.info(f"Device: {DEVICE}")
     training_size = args["trainingsize"]
     if args["generate"]:
-        data = data_gen(args["trainingsize"])
-        data_dict = {
-            "type": "car",
-            "n_hidden": args["nhidden"],
-            "s_hidden": args["shidden"],
-            "dim_action": 2,
-            "dim_state": 3,
-            "action_in": True,
-            "action_out": True,
-            "state_in": True,
-            "state_out": True,
-            # "theta_0_in":True,
-            # "theta_0_out":True,
-        }
+        raise NotImplementedError
     else:
         data_dict = {
             "type": "unicycle1_v0",
@@ -178,95 +137,143 @@ def trainRun(args: Dict):
             "conditioning": {
                 # "delta_0": 1,
                 "rel_probability": 1,
+                "env_theta_start": 1,
+                "env_theta_goal": 1,
                 # "area": 1,
                 # "env_width": 1,
+                # "env_height": 1,
                 # "area_blocked": 1,
                 # "avg_node_connectivity": 1,
-                "avg_clustering": 1,
+                # "avg_clustering": 1,
+                # "cost": 1,
+                # "avg_shortest_path": 1,
             },
         }
-        data = read_yaml(
-            args["load"], **data_dict["regular"], **data_dict["conditioning"]
+        data = load_dataset(
+            args["load"],
+            regular=data_dict["regular"],
+            conditioning=data_dict["conditioning"],
         )
 
-    ic(data.shape)
-    # data = prune(data, 0.1)
+    logger.debug(f"Dataset size: {data.shape[0]}")
+
     dataset = TensorDataset(torch.tensor(data, device=DEVICE))
     if training_size < data.shape[0] and training_size != -1:
         dataset_split = torch.utils.data.random_split(
             dataset, [training_size, data.shape[0] - training_size]
         )[0]
+        logger.debug(f"Split Dataset - size: {len(dataset_split)}")
     else:
         dataset_split = dataset
-    ic(len(dataset_split))
-    loader = DataLoader(dataset_split, batch_size=1024, shuffle=True)
-    
+    batch_size = len(dataset_split)
+    logger.debug(f"Batch size: {batch_size}")
+
+    loader = DataLoader(dataset_split, batch_size=batch_size, shuffle=True)
+
     model = Net(data_dict)
-    
-    
-    trained_model = train(model, loader, data_dict, args["epochs"])
-    model_path = Path("data/models/rand_env_clust_l5.pt")
+
+    trained_model, losses = train(model, loader, args["epochs"])
+    model_path = Path("data/models/test_rand_env_theta_l5___.pt")
+    # model_path = Path("data/models/qtest.pt")
     if model_path.exists():
-        if input("Already exists, overwrite? (y/n)") != 'y':
+        if input(f"{model_path} already exists, overwrite? (y/n) ") != "y":
             return None
     torch.save(trained_model.state_dict(), model_path)
     with open(model_path.with_suffix(".yaml"), "w") as file:
         yaml.safe_dump(data_dict, file, default_flow_style=None)
-    
-    print(f"Model saved as {model_path}")
+
+    logger.info(f"Model saved as {model_path}")
+    plt.plot(np.array(losses))
+    plt.yscale("log")
+    plt.savefig(model_path.with_suffix(".png"))
+    pd.DataFrame(np.array(losses), columns=["training_loss"]).to_csv(
+        model_path.with_suffix(".csv")
+    )
 
 
 def loadRun(args: Dict):
-    model, dataDict = loadModel(modelName=args["model"])
+    model, data_dict = loadModel(modelName=args["model"])
     ws = WeightSampler()
     cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
     # cdf = torch.Tensor(ws.ppf(np.linspace(0,1,args["samples"]))).to(DEVICE)
     # cdf = torch.Tensor(np.linspace(0,1,args["samples"])**10).to(DEVICE)
     samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
-    data = read_yaml(args["load"], **dataDict["regular"], **dataDict["conditioning"])
+    data = load_dataset(
+        args["load"],
+        regular=data_dict["regular"],
+        conditioning=data_dict["conditioning"],
+    )
     ic(data.shape)
     samples[:, 10] = np.mod(np.abs(samples[:, 10]), np.pi) * np.sign(samples[:, 10])
-    plotHist(data, samples, dataDict)
+    plotHist(data, samples, data_dict)
 
 
 def export(args: Dict) -> None:
-    model, dataDict = loadModel(modelName=args["model"])
+    model, data_dict = loadModel(modelName=args["model"])
 
     ws = WeightSampler()
-    if dataDict["conditioning"]:
+    if data_dict["conditioning"]:
         instance_path = args["instance"]
         with open(instance_path, "r") as file:
-            instance_data = yaml.safe_load(file)["environment"]
+            instance_data = yaml.safe_load(file)
+        env_data = instance_data["environment"]
 
+        conditions = sorted(
+            [
+                key
+                for key in data_dict["conditioning"].keys()
+                if key != "rel_probability"
+            ]
+        )
         conditioning = []
-        for condition in SUPP_ETC + SUPP_ENV:
-            if condition not in dataDict["conditioning"].keys():
-                continue
-            else:
-                size = dataDict["conditioning"][condition]
+        for condition in conditions:
+            # if condition not in dataDict["conditioning"].keys():
+            #     continue
+            # else:
+            size = data_dict["conditioning"][condition]
             print(f"Adding {condition}")
-            #if condition == "rel_probability":
+            # if condition == "rel_probability":
             #    cond = torch.tensor(
             #        ws.rvs(size=args["samples"]), device=DEVICE
             #    ).reshape(-1, 1)
-            if condition in instance_data.keys():
+            if condition in env_data.keys():
                 cond = (
-                    torch.ones(size=(args["samples"], size), device=DEVICE, dtype=torch.float64)
-                    * instance_data[condition]
+                    torch.ones(
+                        size=(args["samples"], size), device=DEVICE, dtype=torch.float64
+                    )
+                    * env_data[condition]
                 )
-                print(instance_data[condition])
+                print(env_data[condition])
+            elif condition == "env_theta_start":
+                cond = (
+                    torch.ones(
+                        size=(args["samples"], size), device=DEVICE, dtype=torch.float64
+                    )
+                    * instance_data["robots"][0]["start"][2]
+                )
+                print(instance_data["robots"][0]["start"][2])
+            elif condition == "env_theta_goal":
+                cond = (
+                    torch.ones(
+                        size=(args["samples"], size), device=DEVICE, dtype=torch.float64
+                    )
+                    * instance_data["robots"][0]["goal"][2]
+                )
+                print(instance_data["robots"][0]["goal"][2])
             else:
                 cond = (
-                    torch.ones(size=(args["samples"], size), device=DEVICE, dtype=torch.float64)
+                    torch.ones(
+                        size=(args["samples"], size), device=DEVICE, dtype=torch.float64
+                    )
                     * args[condition]
                 )
                 print(args[condition])
             conditioning.append(cond)
-        if "rel_probability" in dataDict["conditioning"].keys():
+        if "rel_probability" in data_dict["conditioning"].keys():
             print("Adding rel_probability")
-            conditioning.append(torch.tensor(
-                    ws.rvs(size=args["samples"]), device=DEVICE
-                    ).reshape(-1, 1))
+            conditioning.append(
+                torch.tensor(ws.rvs(size=args["samples"]), device=DEVICE).reshape(-1, 1)
+            )
         # conditioning = torch.concat([cdf, delta_0], dim=1)
         conditioning = torch.concat(conditioning, dim=1).to(DEVICE)
         # samples = (
@@ -277,15 +284,15 @@ def export(args: Dict) -> None:
         #     )
         # breakpoint()
         samples = (
-                sample(model, args["samples"], conditioning=conditioning)
-                .detach()
-                .cpu()
-                .numpy()
-            )
+            sample(model, args["samples"], conditioning=conditioning)
+            .detach()
+            .cpu()
+            .numpy()
+        )
         # samples = []
         # best_score = np.inf
         # best_steps = None
-        
+
         # for steps in [50, 100, 150, 200, 250, 300, 350, 400]:
         #     samples_ = (
         #         sample(model, args["samples"], conditioning=conditioning,n_steps=steps)
@@ -300,19 +307,19 @@ def export(args: Dict) -> None:
         #         samples = samples_
         #         best_score = score
         #         best_steps = steps
-            
+
     else:
         samples = sample(model, args["samples"]).detach().cpu().numpy()
     # print(f"Best steps: {best_steps} with {best_score}")
     # breakpoint()
     violations, violation_score = getViolations(samples)
     score = violation_score * violations
-    print(f"{violation_score} * {violations} = {score}" )
-    sampleDict = outputToDict(samples, dataDict)
-    sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5,0.5)
+    print(f"{violation_score} * {violations} = {score}")
+    sampleDict = outputToDict(samples, data_dict)
+    sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5, 0.5)
     # breakpoint()
     # sampleDict["theta_0"] = np.sign(sampleDict["theta_0"]) * np.abs(sampleDict["theta_0"]) % np.pi
-    
+
     ic(max(sampleDict["theta_0"]))
     ic(min(sampleDict["theta_0"]))
     sampleDict["theta_0"] = (sampleDict["theta_0"] + np.pi) % (2 * np.pi) - np.pi

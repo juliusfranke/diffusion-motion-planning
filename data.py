@@ -3,10 +3,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List
 from icecream import ic
-from shapely import is_empty
-import yaml
 import matplotlib.pyplot as plt
-from sklearn.utils import shuffle
 from scipy import stats
 
 S_MIN = -1
@@ -15,30 +12,29 @@ PHI_MIN = -np.pi / 3
 PHI_MAX = np.pi / 3
 
 SUPP_REG = [
-        "start",
-        "goal",
-        "actions",
-        "states",
-    ]
-SUPP_ETC = [
-        "diff",
-        "theta_0",
-        "delta_0",
-    ]
+    "actions",
+    "theta_0",
+    "delta_0",
+]
 SUPP_ENV = [
-        "area",
-        "area_blocked",
-        "area_free",
-        "avg_clustering",
-        "avg_node_connectivity",
-        "avg_shortest_path",
-        "avg_shortest_path_norm",
-        "env_width",
-        "env_height",
-        "mean_size",
-        "n_obstacles",
-        "p_obstacles",
-    ]
+    "env_theta_start",
+    "env_theta_goal",
+    "area",
+    "area_blocked",
+    "area_free",
+    "avg_clustering",
+    "avg_node_connectivity",
+    "avg_shortest_path",
+    "avg_shortest_path_norm",
+    "env_width",
+    "env_height",
+    "mean_size",
+    "n_obstacles",
+    "p_obstacles",
+    "cost",
+]
+SUPP_COMPLETE = SUPP_REG + SUPP_ENV + ["rel_probability"]
+
 
 class WeightSampler(stats.rv_continuous):
     def __init__(self, xtol=1e-14, seed=None):
@@ -114,292 +110,52 @@ def calc_unicycle_states(
     return np.array(states)
 
 
-def calc_car_state(
-    action: np.ndarray,
-    dt: float = 0.1,
-    L: float = 1,
-    start: List[float] = [0, 0, 0],
-    steps: int = 5,
-) -> np.ndarray:
-    x, y, theta = start
-    s, phi = action
-
-    for _ in range(steps):
-        dx = s * np.cos(theta)
-        dy = s * np.sin(theta)
-        dtheta = s / L * np.tan(phi)
-
-        x += dt * dx
-        y += dt * dy
-        theta += dt * dtheta
-
-    return np.array([x, y, theta])
-
-
-def gen_car_state_area(samples=100):
-    s_0 = np.linspace(S_MIN, S_MAX, samples // 4)
-    s_1 = np.array(samples // 4 * [S_MAX])
-    s_2 = np.flip(s_0)
-    s_3 = np.array(samples // 4 * [S_MIN])
-    phi_0 = np.array(samples // 4 * [PHI_MIN])
-    phi_1 = np.linspace(PHI_MIN, PHI_MAX, samples // 4)
-    phi_2 = np.array(samples // 4 * [PHI_MAX])
-    phi_3 = np.flip(phi_1)
-
-    s = np.array([*s_0, *s_1, *s_2, *s_3])
-    phi = np.array([*phi_0, *phi_1, *phi_2, *phi_3])
-
-    data = np.vstack((s, phi)).T
-    # states = [state for calc_car_state(
-    states = [
-        (state[0], state[1]) for state in [calc_car_state(action) for action in data]
+def get_header(dictionary: Dict[str, int]):
+    return [
+        f"{key}_{i}" if value > 1 else key
+        for key, value in dictionary.items()
+        for i in range(value)
     ]
-    return states
 
 
-def gen_car_action() -> np.ndarray:
-    def log_piecewise(min, max, zero_bound=0.2):
-        r = np.abs(min / (max - min))
-        r = 1 / (1 + np.exp(-5 * (r - 0.5)))
+def load_dataset(
+    path: Path, regular: Dict[str, int], conditioning: Dict[str, int]
+) -> np.ndarray:
+    complete = regular | conditioning
+    assert set(complete.keys()) <= set(
+        SUPP_COMPLETE
+    ), f"{[key for key in complete.keys() if key not in SUPP_COMPLETE]} are/is not implemented"
 
-        choice = np.random.uniform(0, 1)
-        s_low = -2 * min - zero_bound
-        s_high = 2 * max - zero_bound
-        if choice >= r:
-            return s_high / (1 + np.exp(-7 / r * (choice - r))) + max - s_high
-        else:
-            return s_low / (1 + np.exp(-7 / r * (choice - r))) + min
+    regular_header = get_header(regular)
+    conditioning_header = get_header(conditioning)
+    columns = regular_header + conditioning_header
 
-    s = log_piecewise(S_MIN, S_MAX)
-    phi = log_piecewise(PHI_MIN, PHI_MAX, zero_bound=0)
-
-    return np.array([s, phi])
-
-
-def metric(a: np.ndarray, b: np.ndarray) -> float:
-    err_xy = a[:, :2] - b[:, :2]
-    err_th = np.array(
-        [
-            np.minimum(
-                np.abs(a[:, 2] - b[:, 2]),
-                2 * np.pi - np.abs(a[:, 2] - b[:, 2]),
-            )
-        ]
-    )
-    sq_err = np.sum(np.square(np.concatenate([err_xy.T, err_th], axis=0)), axis=0)
-
-    return sq_err
-
-
-def car_val(pred: np.ndarray, actions: np.ndarray):
-    states = np.array([calc_car_state(action) for action in actions])
-    error = metric(states, pred)
-    mse = np.mean(error)
-    return {"mse": mse, "error": error, "states": states}
-
-
-def data_gen(length: int) -> np.ndarray:
-    # data = [
-    #     np.concatenate([calc_car_state(action=action), action], axis=-1)
-    #     for action in [gen_car_action() for _ in range(length)]
-    # ]
-    data = []
-    while True:
-        if len(data) == length:
-            break
-        action = gen_car_action()
-        state = calc_car_state(action=action)
-        if data:
-            min_dist = np.min(
-                np.linalg.norm(
-                    np.array(data)[:, :2] - np.array([state])[:, :2], axis=-1
-                )
-            )
-            # ic(min_dist)
-            if min_dist < 0.015:
-                continue
-        state_action = np.concatenate([state, action], axis=-1)
-        noise = np.random.normal(0, 5e-3, state_action.shape[0])
-        data.append(state_action + noise)
-
-        # ic(len(data))
-        if len(data) % 100 == 0:
-            ic(len(data))
-    return np.array(data)
-
-
-def circle_SO2(theta_range, n=100):
-    theta = np.linspace(-theta_range, theta_range, n).reshape(-1, 1)
-    start = np.concatenate([np.zeros((n, 2)), theta], axis=1)
-    goal = np.concatenate([0.25 * np.cos(theta), 0.25 * np.sin(theta), theta], axis=1)
-    # ic(start, goal, theta)
-    diff = np.array(
-        [calc_diff_SO2(start_i, goal_i) for start_i, goal_i in zip(start, goal)]
-    )
-    data = {"start": start, "goal": goal, "diff": diff}
-    return data
-
-
-def calc_diff_SO2(start: np.ndarray, goal: np.ndarray) -> np.ndarray:
-    def diff(start: np.ndarray, goal: np.ndarray) -> np.ndarray:
-        rot = -start[2]
-        phi = goal[2] + rot
-        # print(rot, phi)
-        M_T = np.array(
-            [
-                [np.cos(rot), -np.sin(rot)],
-                [np.sin(rot), np.cos(rot)],
-            ]
+    rel_p = "rel_probability" in columns
+    if rel_p:
+        columns.remove(
+            "rel_probability",
         )
-        return np.array([*(M_T @ (goal[:2] - start[:2])), phi])
 
-    if len(goal.shape) == 1:
-        return diff(start, goal)
-    else:
-        return np.array([diff(s, g) for s, g in zip(start, goal)])
+    dataset = pd.read_parquet(path, columns=columns + ["count"])
+    dataset = dataset.groupby(columns, as_index=False).agg({"count": "sum"})
 
-
-def prune(data: np.ndarray, delta: float) -> np.ndarray:
-    returnList = []
-    for i in range(data.shape[0]):
-        entry = data[i, :]
-        if returnList:
-            diff = np.linalg.norm(np.array(returnList) - entry, axis=1)
-            if (diff <= delta).any():
-                continue
-        returnList.append(entry)
-
-    return np.array(returnList)
-
-
-def read_yaml(path: Path, **kwargs: int) -> np.ndarray: 
-    supported_complete = SUPP_REG + SUPP_ETC + SUPP_ENV + ["rel_probability"]
-    assert (
-        set(kwargs.keys()) <= set(supported_complete)
-    ), f"{[key for key in kwargs.keys() if key not in supported_complete]} are/is not implemented"
-
-    with open(path, "r") as file:
-        data = yaml.safe_load(file)
-
-    return_array = np.array([])
-    return_df = {}
-    key_data = np.array([])
-    rel_idx = 0
-    header = []
-
-    for key in supported_complete:
-        if key not in kwargs.keys():
-            continue
-        else:
-            value = kwargs[key]
-        print(f"Adding {key}")
-        if key in SUPP_REG:
-            key_data = np.array([np.array(mp[key]).flatten() for mp in data])
-        elif key == "diff":
-            start = np.array([np.array(mp["start"]).flatten() for mp in data])
-            goal = np.array([np.array(mp["goal"]).flatten() for mp in data])
-            key_data = calc_diff_SO2(start, goal)
-        elif key == "theta_0":
-            key_data = np.array([np.array(mp["start"])[2] for mp in data]).reshape(
-                -1, 1
-            )
-        elif key in SUPP_ENV + SUPP_ETC:
-            key_data = np.array([np.array(mp[key]) for mp in data]).reshape(-1, 1)
-        elif key == "rel_probability":
-            key_data = np.array([np.array(mp["count"]) for mp in data]).reshape(-1, 1)
-            key = "count"
-        else:
-            raise NotImplementedError(f"{key} is not implemented")
-
-        
-        assert key_data.shape[1] == value
-        if value != 1:
-            header = header + [f"{key}_{i}" for i in range(value)]
-        else:
-            header.append(key)
-        if not return_array.size:
-            return_array = key_data
-        else:
-            return_array = np.concatenate([return_array, key_data], axis=-1)
-        #return_df[key] = key_data
-    df = pd.DataFrame(return_array, columns= header)
-    header_dupe = header
-    if "count" in header_dupe:
-        header_dupe.remove("count")
-        df = df.groupby(header_dupe, as_index=False).agg({'count': 'sum'})
-    else:
-        df.drop_duplicates(inplace=True)
-    if "rel_probability" in kwargs.keys():
-        env_group = [env_key for env_key in SUPP_ENV if env_key in kwargs.keys()]
-        ic(env_group)
-
+    if rel_p:
+        env_group = [env_key for env_key in SUPP_ENV if env_key in complete.keys()]
         if env_group:
-            df["group_total"] = df.groupby(env_group)["count"].transform("max")
+            dataset["group_max"] = dataset.groupby(env_group)["count"].transform("max")
         else:
-            df["group_total"] = df["count"].max()
-        df['rel_probability'] = df['count'] / df['group_total']
-        selector = np.zeros(len(df))
-        selector[::2] = 1
-        df["selector"] = selector
-        # df.drop(df[(df.rel_probability < df.rel_probability.mean()) & (df.selector == 1)].index, inplace=True)
-        df.drop(columns=["count", "group_total", "selector"], inplace=True)
-    # else:
-    #     selector = np.zeros(len(df))
-    #     selector[::4] = 1
-    #     df["selector"] = selector
-    #     df.drop(df[df.selector == 1].index, inplace=True)
+            dataset["group_max"] = dataset["count"].max()
+        dataset["rel_probability"] = dataset["count"] / dataset["group_max"]
+        dataset.drop(columns=["group_max", "count"], inplace=True)
 
-    return_array = df.to_numpy()
-    ic(df.columns)
-    ic(df.min())
-    ic(df.max())
-        
-    
-    #return_array = return_array[
-    #    return_array[:, rel_idx] > return_array[:, rel_idx].mean() / 4
-    #]
+    sorted_header = sorted(regular_header) + sorted(conditioning_header)
+    dataset = dataset.reindex(sorted_header, axis=1)
+    return_array = dataset.to_numpy()
+    # ic(dataset.columns)
+    # ic(dataset.min())
+    # ic(dataset.max())
+
     return return_array
-
-
-def spiral_points(n=100, arc=0.25, separation=0.5):
-    """generate points on an Archimedes' spiral
-    with `arc` giving the length of arc between two points
-    and `separation` giving the distance between consecutive
-    turnings
-    - approximate arc length with circle arc at given distance
-    - use a spiral equation r = b * phi
-    """
-
-    def p2c(r, phi):
-        """polar to cartesian"""
-        return [r * np.cos(phi), r * np.sin(phi), (phi + np.pi / 2) % (2 * np.pi)]
-
-    # yield a point at origin
-    states = []
-    diff = []
-    # initialize the next point in the required distance
-    r = arc
-    b = separation / (2 * np.pi)
-    # find the first phi to satisfy distance of `arc` to the second point
-    phi = float(r) / b
-    for _ in range(n + 1):
-        next_state = p2c(r, phi)
-        states.append(next_state)
-        # advance the variables
-        # calculate phi that will give desired arc length at current radius
-        # (approximating with circle)
-        phi += float(arc) / r
-        r = b * phi
-    states = np.array(states)
-    start = states[:-1]
-    goal = states[1:]
-
-    diff = np.array(
-        [calc_diff_SO2(start_i, goal_i) for start_i, goal_i in zip(start, goal)]
-    )
-    ic(len(start))
-    data = {"start": start, "goal": goal, "diff": diff}
-    return data
 
 
 if __name__ == "__main__":

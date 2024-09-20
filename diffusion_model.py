@@ -7,6 +7,9 @@ import torch.utils.data
 from icecream import ic
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import logging
+
+logger = logging.getLogger(__name__)
 
 N_SEQ = 1_000
 EPOCHS = 200
@@ -17,32 +20,46 @@ DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 class Net(nn.Module):
     def __init__(self, config: Dict):
         super().__init__()
-        self.input: Dict[str, int] = config["regular"]
+        logger.debug("Creating Net")
+        self.regular: Dict[str, int] = config["regular"]
         self.conditioning: Dict[str, int] = config["conditioning"]
-        self.validate: Dict[str, int] = self.input | self.conditioning
+        self.validate: Dict[str, int] = self.regular | self.conditioning
 
-        self.output_size = sum(self.input.values())
+        self.output_size = sum(self.regular.values())
         self.condition_size = sum(self.conditioning.values())
         self.input_size = self.output_size + self.condition_size + 1
 
-        ic(self.input_size, self.output_size)
-        ic(self.input)
-        ic(self.conditioning)
+        logger.debug(f"Input size : {self.input_size}")
+        logger.debug(f"Output size : {self.output_size}")
+
+        logger.debug("Input")
+        for regular in self.regular.keys():
+            logger.debug(f"{regular} : {self.regular[regular]}")
+
+        logger.debug("Conditioning")
+        for condition in self.conditioning.keys():
+            logger.debug(f"{condition} : {self.conditioning[condition]}")
+
         layers = [nn.Linear(self.input_size, config["s_hidden"], dtype=torch.float64)]
         for _ in range(config["n_hidden"]):
-            layers.append(nn.Linear(config["s_hidden"], config["s_hidden"], dtype=torch.float64))
-        layers.append(nn.Linear(config["s_hidden"], self.output_size, dtype=torch.float64))
+            layers.append(
+                nn.Linear(config["s_hidden"], config["s_hidden"], dtype=torch.float64)
+            )
+        layers.append(
+            nn.Linear(config["s_hidden"], self.output_size, dtype=torch.float64)
+        )
         self.linears = nn.ModuleList(layers)
 
         for layer in self.linears:
             nn.init.kaiming_uniform_(layer.weight)
         self.loss_fn = {"actions": self._loss_actions, "theta_0": self._loss_theta_0}
+        logger.debug("Created Net")
 
     def loss(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
-        return torch.mean((noise[:,:self.output_size] - output) ** 2)
+        return torch.mean((noise[:, : self.output_size] - output) ** 2)
         # idx = 0
         # loss = torch.zeros(output.shape, device=DEVICE)
-        # for key, value in self.input.items():
+        # for key, value in self.regular.items():
         #     idx_to = value + idx
         #     loss[:, idx:idx_to] = self.loss_fn[key](
         #         output[:, idx:idx_to], noise[:, idx:idx_to]
@@ -52,7 +69,7 @@ class Net(nn.Module):
 
     def forward(self, x, t):
         x = torch.concat([x, t], dim=-1)
-    
+
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
         return self.linears[-1](x)
@@ -66,7 +83,6 @@ class Net(nn.Module):
     def _loss_theta_0(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
         assert output.shape[1] == 1
         assert noise.shape[1] == 1
-        
 
         difference = noise - output
         x = torch.cos(difference)
@@ -74,7 +90,7 @@ class Net(nn.Module):
         rel_dist = (torch.atan2(y, x) / np.pi) ** 2
         # penalty = torch.gt(torch.abs(output), np.pi) * (torch.abs(output))**10
         # rel_dist += penalty
-        return rel_dist 
+        return rel_dist
 
 
 def get_alpha_betas(N: int):
@@ -97,7 +113,6 @@ def get_alpha_betas(N: int):
 def train(
     model: Net,
     loader: DataLoader,
-    config: Dict,
     nepochs: int = 10,
     denoising_steps: int = 100,
 ):
@@ -147,7 +162,7 @@ def train(
             mean_loss = np.mean(np.array(losses))
             pbar.set_description(f"Mean loss = {mean_loss:.5f}")
 
-    return model
+    return model, losses
 
 
 def sample(
