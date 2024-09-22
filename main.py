@@ -25,41 +25,38 @@ def main():
     trainModelParser = subparsers.add_parser("train", help="train new model")
     trainModelParser.set_defaults(fn="trainRun")
     trainModelParser.add_argument(
+        "dataset", type=str, help="training dataset file (.parquet)"
+    )
+    trainModelParser.add_argument(
+        "config",
+        type=isFile,
+        help="yaml config for model layout",
+    )
+    trainModelParser.add_argument("name", type=str, help="output name")
+    trainModelParser.add_argument(
         "-e",
         "--epochs",
         type=int,
         default=10_000,
-        metavar="AMOUNT",
-        help="epochs to train",
+        help="epochs to train (default 10_000)",
     )
     trainModelParser.add_argument(
         "-t",
         "--trainingsize",
         type=int,
-        default=1000,
-        metavar="AMOUNT",
-        help="size of training dataset",
+        default=-1,
+        help="amount of data to load (default -1, for all)",
     )
     trainModelParser.add_argument(
-        "-nh",
-        "--nhidden",
-        type=int,
-        default=4,
-        metavar="AMOUNT",
-        help="amount of hidden layers",
+        "-v",
+        "--valsplit",
+        type=float,
+        default=0.9,
+        help="validation split (default 0.9)",
     )
-    trainModelParser.add_argument(
-        "-sh",
-        "--shidden",
-        type=int,
-        default=256,
-        metavar="AMOUNT",
-        help="size of hidden layers",
-    )
-
-    datagroup = trainModelParser.add_mutually_exclusive_group()
-    datagroup.add_argument("-g", "--generate", action="store_true")
-    datagroup.add_argument("-l", "--load", metavar="FILE", type=isFile)
+    # datagroup = trainModelParser.add_mutually_exclusive_group()
+    # datagroup.add_argument("-g", "--generate", action="store_true")
+    # datagroup.add_argument("-l", "--load", metavar="FILE", type=isFile)
 
     # Loading model
     loadModelParser = subparsers.add_parser("load", help="load model from file")
@@ -92,8 +89,16 @@ def main():
         "--samples",
         type=int,
         default=1000,
+        nargs="*",
         metavar="AMOUNT",
         help="amount of samples to generate",
+    )
+    exportParser.add_argument(
+        "-r",
+        "--repeat",
+        type=int,
+        default=1,
+        help="how often to repeat the process",
     )
     exportParser.add_argument(
         "-o", "--out", type=str, default=None, metavar="OUT", help="file to output to"
@@ -127,7 +132,17 @@ def main():
         from model_runner import export
 
         args = vars(args)
-        export(args)
+
+        for model_size in args["samples"]:
+            for trial in range(args["repeat"]):
+                i_args = args.copy()
+                i_args["samples"] = model_size
+                i_args["out"] = (
+                    i_args["out"]
+                    .replace("MODEL_SIZE", str(model_size))
+                    .replace("TRIAL", str(trial))
+                )
+                export(i_args)
 
 
 if __name__ == "__main__":

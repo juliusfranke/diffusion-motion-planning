@@ -5,6 +5,8 @@ from typing import Dict, List
 from icecream import ic
 import matplotlib.pyplot as plt
 from scipy import stats
+from sklearn.neighbors import NearestNeighbors
+import torch
 
 S_MIN = -1
 S_MAX = 2
@@ -36,6 +38,53 @@ SUPP_ENV = [
 SUPP_COMPLETE = SUPP_REG + SUPP_ENV + ["rel_probability"]
 
 
+def wasserstein_distance_pytorch(real_data, generated_data):
+    """Compute the Wasserstein distance between real and generated data for each dimension."""
+    n_features = real_data.shape[1]
+    distances = []
+    for i in range(n_features):
+        distances.append(
+            stats.wasserstein_distance(
+                real_data[:, i].cpu().numpy(), generated_data[:, i].cpu().numpy()
+            )
+        )
+    return torch.tensor(distances).mean().item()
+
+
+def rbf_kernel(x, y, sigma=1.0):
+    """Compute the RBF kernel between two sets of data points."""
+    return torch.exp(-torch.cdist(x, y) ** 2 / (2 * sigma**2))
+
+
+def mmd_rbf(real_data, generated_data, sigma=1.0):
+    """Compute the Maximum Mean Discrepancy (MMD) with RBF kernel."""
+    xx = rbf_kernel(real_data, real_data, sigma)
+    yy = rbf_kernel(generated_data, generated_data, sigma)
+    xy = rbf_kernel(real_data, generated_data, sigma)
+
+    mmd = xx.mean() + yy.mean() - 2 * xy.mean()
+    return mmd.item()
+
+
+def precision_recall_coverage(real_data, generated_data, k=5, threshold=0.5):
+    """Compute Precision, Recall, and Coverage for generative models."""
+    nbrs_real = NearestNeighbors(n_neighbors=k).fit(real_data)
+    nbrs_gen = NearestNeighbors(n_neighbors=k).fit(generated_data)
+
+    # Precision: Fraction of generated points within the manifold of real data
+    distances_gen, _ = nbrs_real.kneighbors(generated_data)
+    precision = (distances_gen.mean(axis=1) < threshold).mean()
+
+    # Recall: Fraction of real points within the manifold of generated data
+    distances_real, _ = nbrs_gen.kneighbors(real_data)
+    recall = (distances_real.mean(axis=1) < threshold).mean()
+
+    # Coverage: Fraction of real data points covered by generated points
+    coverage = (distances_real.min(axis=1) < threshold).mean()
+
+    return precision, recall, coverage
+
+
 class WeightSampler(stats.rv_continuous):
     def __init__(self, xtol=1e-14, seed=None):
         super().__init__(a=0, b=1, xtol=xtol, seed=seed)
@@ -45,6 +94,17 @@ class WeightSampler(stats.rv_continuous):
         # return 1-np.exp(-5*x**2)
         # return x**4
         return x**10
+
+
+def get_violations(samples):
+    samples = samples[:, :10]
+    is_violation = np.abs(samples) > 0.5
+
+    total_violations = np.sum(is_violation)
+    total = np.prod(samples.shape)
+    violations = total_violations / total
+    violation_score = np.sum(is_violation * (np.abs(samples[:, :10]) - 0.5)) / total
+    return violations, violation_score
 
 
 def pruneDataset(

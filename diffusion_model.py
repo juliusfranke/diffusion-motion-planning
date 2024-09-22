@@ -1,5 +1,5 @@
 import time
-from typing import Dict
+from typing import Dict, List
 
 import numpy as np
 import torch.nn as nn
@@ -7,7 +7,16 @@ import torch.utils.data
 from icecream import ic
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from tqdm._utils import _term_move_up
+from pathlib import Path
 import logging
+from data import (
+    get_violations,
+    precision_recall_coverage,
+    mmd_rbf,
+    wasserstein_distance_pytorch,
+)
+from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +37,9 @@ class Net(nn.Module):
         self.output_size = sum(self.regular.values())
         self.condition_size = sum(self.conditioning.values())
         self.input_size = self.output_size + self.condition_size + 1
+
+        self.info = config.copy()
+        self.path: None | Path = None
 
         logger.debug(f"Input size : {self.input_size}")
         logger.debug(f"Output size : {self.output_size}")
@@ -55,6 +67,14 @@ class Net(nn.Module):
         self.loss_fn = {"actions": self._loss_actions, "theta_0": self._loss_theta_0}
         logger.debug("Created Net")
 
+    def save(self, epoch, pbar: tqdm):
+        if isinstance(self.path, Path):
+            torch.save(self.state_dict(), self.path)
+            pbar.set_description(f"Saved @ epoch {epoch}")
+        else:
+            logger.error("Model path not set")
+            raise Exception
+
     def loss(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
         return torch.mean((noise[:, : self.output_size] - output) ** 2)
         # idx = 0
@@ -67,8 +87,8 @@ class Net(nn.Module):
         #     idx += value
         # return torch.mean(loss)
 
-    def forward(self, x, t):
-        x = torch.concat([x, t], dim=-1)
+    def forward(self, x):
+        # x = torch.concat([x, t], dim=-1)
 
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
@@ -110,59 +130,166 @@ def get_alpha_betas(N: int):
     return alpha_bars, betas
 
 
+def train_epoch(
+    training_loader: DataLoader,
+    model: Net,
+    optimizer,
+    alpha_bars,
+    denoising_steps: int,
+):
+
+    output_size = model.output_size
+    running_loss = 0.0
+    for i, [data] in enumerate(training_loader):
+        data = data.to(DEVICE)
+        optimizer.zero_grad()
+
+        # Fwd pass
+        t = torch.randint(
+            denoising_steps, size=(data.shape[0],)
+        )  # sample timesteps - 1 per datapoint
+        alpha_t = (
+            torch.index_select(torch.Tensor(alpha_bars), 0, t).unsqueeze(1).to(DEVICE)
+        )  # Get the alphas for each timestep
+
+        noise = torch.randn(
+            *data.shape, device=DEVICE
+        )  # Sample DIFFERENT random noise for each datapoint
+        model_in = (
+            alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
+        )  # Noise corrupt the data (eq14)
+
+        x = torch.concat([model_in, t.unsqueeze(1).to(DEVICE)], dim=-1)
+        out = model(x)
+        loss = torch.mean(
+            (noise[:, :output_size] - out) ** 2
+        )  # Compute loss on prediction (eq14)
+        loss = model.loss(out, noise)
+
+        # losses.append(loss.detach().cpu().numpy())
+        running_loss += loss.detach().cpu().numpy()
+        # Bwd pass
+        loss.backward()
+        optimizer.step()
+
+    model.info["train_metrics"]["loss/train"].append(running_loss / (i + 1))
+
+
+def val_epoch(
+    validation_loader: DataLoader,
+    model: Net,
+):
+
+    running_vloss = 0.0
+    running_violations = 0.0
+    running_violation_score = 0.0
+
+    with torch.no_grad():
+        for i, [vdata] in enumerate(validation_loader):
+            regular = vdata[:, : model.output_size]
+            conditioning = vdata[:, model.output_size :]
+            pred = sample(model, len(vdata), conditioning=conditioning)
+            val_loss = model.loss(regular, pred).detach().cpu().numpy()
+            running_vloss += val_loss
+            violations, violation_score = get_violations(pred.detach().cpu().numpy())
+            running_violations += violations
+            running_violation_score += violation_score
+
+    avg_vloss = running_vloss / (i + 1)
+    avg_violations = running_violations / (i + 1)
+    avg_violation_score = running_violation_score / (i + 1)
+
+    model.info["val_metrics"]["loss/val"].append(avg_vloss)
+    model.info["val_metrics"]["viol/percent"].append(avg_violations)
+    model.info["val_metrics"]["viol/avg"].append(avg_violation_score)
+
+
+def test_epoch(
+    test_loader: DataLoader,
+    model: Net,
+):
+
+    assert len(test_loader) == 1
+    with torch.no_grad():
+        for [test_data] in test_loader:
+            regular = test_data[:, : model.output_size]
+            conditioning = test_data[:, model.output_size :]
+            pred = sample(model, len(test_data), conditioning=conditioning)
+            # mmd = mmd_rbf(regular, pred)
+            emd = wasserstein_distance_pytorch(regular, pred)
+
+    # model.info["test_metrics"]["loss/mmd"].append(mmd)
+    model.info["test_metrics"]["loss/emd"].append(emd)
+
+
 def train(
     model: Net,
-    loader: DataLoader,
+    training_loader: DataLoader,
+    validation_loader: DataLoader,
+    test_loader: DataLoader,
+    tb_writer: SummaryWriter,
     nepochs: int = 10,
     denoising_steps: int = 100,
 ):
     """Alg 1 from the DDPM paper"""
     model.to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    lr = 1e-3
+    model.info["lr"] = lr
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     alpha_bars, _ = get_alpha_betas(denoising_steps)  # Precompute alphas
-    losses = []
 
-    output_size = model.output_size
     pbar = tqdm(range(nepochs))
-    mean_loss = 0
-    for epoch in pbar:
-        for [data] in loader:
-            data = data.to(DEVICE)
-            optimizer.zero_grad()
+    model.info["train_metrics"] = {"loss/train": []}
+    model.info["val_metrics"] = {
+        "loss/val": [],
+        "viol/percent": [],
+        "viol/avg": [],
+    }
+    model.info["test_metrics"] = {"loss/emd": []}
+    try:
+        for epoch in pbar:
+            train_epoch(
+                training_loader,
+                model,
+                optimizer,
+                alpha_bars,
+                denoising_steps,
+            )
+            for train_metric in model.info["train_metrics"].keys():
+                tb_writer.add_scalar(
+                    train_metric,
+                    model.info["train_metrics"][train_metric][-1],
+                    epoch + 1,
+                )
+            if (epoch + 1) % 10 != 0:
+                continue
+            model.eval()
+            val_epoch(validation_loader, model)
+            for val_metric in model.info["val_metrics"].keys():
+                tb_writer.add_scalar(
+                    val_metric, model.info["val_metrics"][val_metric][-1], epoch + 1
+                )
+            if (epoch + 1) % 20 != 0:
+                continue
+            test_epoch(test_loader, model)
+            for test_metric in model.info["test_metrics"].keys():
+                tb_writer.add_scalar(
+                    test_metric, model.info["test_metrics"][test_metric][-1], epoch + 1
+                )
+            if (
+                np.argmin(model.info["test_metrics"]["loss/emd"])
+                == len(model.info["test_metrics"]["loss/emd"]) - 1
+            ):
+                model.save(epoch + 1, pbar)
 
-            # Fwd pass
-            t = torch.randint(
-                denoising_steps, size=(data.shape[0],)
-            )  # sample timesteps - 1 per datapoint
-            alpha_t = (
-                torch.index_select(torch.Tensor(alpha_bars), 0, t)
-                .unsqueeze(1)
-                .to(DEVICE)
-            )  # Get the alphas for each timestep
+            tb_writer.flush()
 
-            noise = torch.randn(
-                *data.shape, device=DEVICE
-            )  # Sample DIFFERENT random noise for each datapoint
-            model_in = (
-                alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
-            )  # Noise corrupt the data (eq14)
-            out = model(model_in, t.unsqueeze(1).to(DEVICE))
-            loss = torch.mean(
-                (noise[:, :output_size] - out) ** 2
-            )  # Compute loss on prediction (eq14)
-            loss_new = model.loss(out, noise)
-            loss = loss_new
-            losses.append(loss.detach().cpu().numpy())
+    except KeyboardInterrupt:
+        logger.info("Cancelled training (Keyboard Interrupt)")
 
-            # Bwd pass
-            loss.backward()
-            optimizer.step()
+    model.info["epochs"] = epoch + 1
 
-        if (epoch + 1) % 10 == 0:
-            mean_loss = np.mean(np.array(losses))
-            pbar.set_description(f"Mean loss = {mean_loss:.5f}")
-
-    return model, losses
+    return model
 
 
 def sample(
@@ -190,8 +317,11 @@ def sample(
         if trained_model.condition_size != 0 and isinstance(conditioning, torch.Tensor):
             if conditioning.shape[1] < 2:
                 conditioning = conditioning.reshape(-1, 1)
+            # model_prediction = trained_model(
+            #     torch.concat([x_t, conditioning], dim=-1), ts
+            # )
             model_prediction = trained_model(
-                torch.concat([x_t, conditioning], dim=-1), ts
+                torch.concat([x_t, conditioning, ts], dim=-1)
             )
             x_t = (
                 1
