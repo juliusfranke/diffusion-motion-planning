@@ -51,8 +51,8 @@ def main():
         "-v",
         "--valsplit",
         type=float,
-        default=0.9,
-        help="validation split (default 0.9)",
+        default=0.8,
+        help="validation split (default 0.8)",
     )
     # datagroup = trainModelParser.add_mutually_exclusive_group()
     # datagroup.add_argument("-g", "--generate", action="store_true")

@@ -24,6 +24,7 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+torch.manual_seed(0)
 
 
 def plotTraining(trainingData) -> None:
@@ -140,17 +141,17 @@ def trainRun(args: Dict):
         args["dataset"],
         regular=data_dict["regular"],
         conditioning=data_dict["conditioning"],
-    )
+    ).to_numpy()
 
-    test_data = load_dataset(
-        "data/training_datasets/rand_env_l5_test.parquet",
-        regular=data_dict["regular"],
-        conditioning=data_dict["conditioning"],
-    )
+    # test_data = load_dataset(
+    #     "data/training_datasets/rand_env_l5_test.parquet",
+    #     regular=data_dict["regular"],
+    #     conditioning=data_dict["conditioning"],
+    # )
     logger.info(f"Dataset size: {data.shape[0]}")
 
     dataset = TensorDataset(torch.tensor(data, device=DEVICE))
-    test_dataset = TensorDataset(torch.tensor(test_data, device=DEVICE))
+    # test_dataset = TensorDataset(torch.tensor(test_data, device=DEVICE))
 
     if training_size == -1 or training_size > len(dataset):
         training_size = len(dataset)
@@ -159,10 +160,10 @@ def trainRun(args: Dict):
             dataset, [training_size, len(dataset) - training_size]
         )[0]
         logger.info(f"Selected dataset size: {training_size}")
-    if training_size < len(test_dataset):
-        test_dataset = torch.utils.data.random_split(
-            test_dataset, [training_size, len(test_dataset) - training_size]
-        )[0]
+    # if training_size < len(test_dataset):
+    #     test_dataset = torch.utils.data.random_split(
+    #         test_dataset, [training_size, len(test_dataset) - training_size]
+    #     )[0]
 
     len_training = int(training_size * val_split)
     len_validation = int(training_size - len_training)
@@ -170,8 +171,8 @@ def trainRun(args: Dict):
     training_set, validation_set = torch.utils.data.random_split(
         dataset, [len_training, len_validation]
     )
-    batch_size_train = min(len_training, 512)
-    batch_size_val = min(len_validation, 512)
+    batch_size_train = min(len_training // 10, 4096)
+    batch_size_val = min(len_validation // 10, 4096)
     logger.debug(f"Batch size: {batch_size_train}")
 
     training_loader = DataLoader(
@@ -180,16 +181,16 @@ def trainRun(args: Dict):
     validation_loader = DataLoader(
         validation_set, batch_size=batch_size_val, shuffle=True
     )
-    test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=True)
+    # test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=True)
 
     model = Net(data_dict)
     model.path = model_path
     timestamp = datetime.now().strftime("%d-%m-%y %H:%M")
     tb_writer = SummaryWriter(f"runs/{name}/{timestamp}")
-    example = iter(validation_loader)
-    ts = torch.ones((batch_size_val, 1)).to("cpu")
-    example_data = torch.concat([example._next_data()[0].to("cpu"), ts], dim=-1)
-    tb_writer.add_graph(model, example_data)
+    # example = iter(validation_loader)
+    # ts = torch.ones((batch_size_val, 1)).to("cpu")
+    # example_data = torch.concat([example._next_data()[0].to("cpu"), ts], dim=-1)
+    # tb_writer.add_graph(model, example_data)
     # for regular, size in data_dict["regular"].items():
     #     tb_writer.add_text(str(regular), str(size))
     start = time.time()
@@ -197,9 +198,9 @@ def trainRun(args: Dict):
         model,
         training_loader,
         validation_loader,
-        test_loader,
         tb_writer,
         args["epochs"],
+        data_dict["denoising_steps"],
     )
     end = time.time()
     duration = end - start
@@ -228,14 +229,18 @@ def trainRun(args: Dict):
             "training_time": duration,
             "epoch/s": model.info["epochs"] / duration,
             "conditioning": cond_str,
+            "loss_fn": data_dict["loss"],
+            "denoising_steps": data_dict["denoising_steps"],
         }
         | {f"z_{key}": str(key in all_keys) for key in SUPP_COMPLETE},
         {f"min_{key}": min(value) for key, value in model.info["train_metrics"].items()}
-        | {f"min_{key}": min(value) for key, value in model.info["val_metrics"].items()}
         | {
-            f"min_{key}": min(value)
-            for key, value in model.info["test_metrics"].items()
+            f"min_{key}": min(value) for key, value in model.info["val_metrics"].items()
         },
+        # | {
+        #     f"min_{key}": min(value)
+        #     for key, value in model.info["test_metrics"].items()
+        # },
         run_name=".",
         hparam_domain_discrete={f"z_{key}": ["True", "False"] for key in SUPP_COMPLETE},
     )
@@ -277,7 +282,7 @@ def export(args: Dict) -> None:
             [
                 key
                 for key in data_dict["conditioning"].keys()
-                if key != "rel_probability"
+                # if key != "rel_probability"
             ]
         )
         conditioning = []
@@ -315,6 +320,15 @@ def export(args: Dict) -> None:
                     * instance_data["robots"][0]["goal"][2]
                 )
                 # print(instance_data["robots"][0]["goal"][2])
+            elif condition == "rel_probability":
+                cond = torch.tensor(
+                    ws.rvs(size=args["samples"]), device=DEVICE, dtype=torch.float64
+                ).reshape(-1, 1)
+            elif condition == "location":
+                cond = torch.linspace(
+                    0, 1, args["samples"], device=DEVICE, dtype=torch.float64
+                ).reshape(-1, 1)
+
             else:
                 cond = (
                     torch.ones(
@@ -324,11 +338,11 @@ def export(args: Dict) -> None:
                 )
                 # print(args[condition])
             conditioning.append(cond)
-        if "rel_probability" in data_dict["conditioning"].keys():
-            # print("Adding rel_probability")
-            conditioning.append(
-                torch.tensor(ws.rvs(size=args["samples"]), device=DEVICE).reshape(-1, 1)
-            )
+        # if "rel_probability" in data_dict["conditioning"].keys():
+        #     # print("Adding rel_probability")
+        #     conditioning.append(
+        #         torch.tensor(ws.rvs(size=args["samples"]), device=DEVICE).reshape(-1, 1)
+        #     )
         # conditioning = torch.concat([cdf, delta_0], dim=1)
         conditioning = torch.concat(conditioning, dim=1).to(DEVICE)
         # samples = (
@@ -339,7 +353,12 @@ def export(args: Dict) -> None:
         #     )
         # breakpoint()
         samples = (
-            sample(model, args["samples"], conditioning=conditioning)
+            sample(
+                model,
+                args["samples"],
+                conditioning=conditioning,
+                n_steps=data_dict["denoising_steps"],
+            )
             .detach()
             .cpu()
             .numpy()

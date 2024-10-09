@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.neighbors import NearestNeighbors
 import torch
+from geomloss import SamplesLoss
 
 S_MIN = -1
 S_MAX = 2
@@ -34,8 +35,62 @@ SUPP_ENV = [
     "n_obstacles",
     "p_obstacles",
     "cost",
+    "location",
 ]
 SUPP_COMPLETE = SUPP_REG + SUPP_ENV + ["rel_probability"]
+
+sinkhorn_loss = SamplesLoss("sinkhorn", p=2, blur=0.05)
+
+
+def sinkhorn(real: torch.Tensor, pred: torch.Tensor):
+    pred = pred.to(torch.float64)
+    return sinkhorn_loss(real, pred)
+
+
+def mae(real: torch.Tensor, pred: torch.Tensor):
+    error = torch.abs(real - pred)
+    return torch.mean(error)
+
+
+def mse(real: torch.Tensor, pred: torch.Tensor):
+    error = real - pred
+    return torch.mean(error**2)
+
+
+def mse_theta(real: torch.Tensor, pred: torch.Tensor):
+    action_error = (real[:, :10] - pred[:, :10]) ** 2
+    difference = real[:, 10] - pred[:, 10]
+    x = torch.cos(difference)
+    y = torch.sin(difference)
+    theta_error = torch.atan2(y, x) ** 2
+
+    return torch.mean(torch.concat([action_error.flatten(), theta_error]))
+
+
+def clipped_mse_loss(real, pred, min_val, max_val):
+    pred_clipped = torch.clamp(pred, min_val, max_val)
+    return torch.mean((real - pred_clipped) ** 2)
+
+
+def log_cosh_loss(real, pred):
+    return torch.mean(torch.log(torch.cosh(pred - real)))
+
+
+def weighted_mse_loss(real, pred, min_val, max_val):
+    weights = torch.abs(real - (min_val + max_val) / 2)
+    return torch.mean(weights * (pred - real) ** 2)
+
+
+def boundary_aware_loss(real, pred, min_val, max_val):
+    mse_loss = torch.mean((pred - real) ** 2)
+    min_val = min_val[real.shape[1]]
+    max_val = max_val[real.shape[1]]
+
+    boundary_penalty = torch.mean(
+        torch.relu(pred - max_val) + torch.relu(min_val - pred)
+    )
+
+    return mse_loss + boundary_penalty
 
 
 def wasserstein_distance_pytorch(real_data, generated_data):
@@ -44,9 +99,7 @@ def wasserstein_distance_pytorch(real_data, generated_data):
     distances = []
     for i in range(n_features):
         distances.append(
-            stats.wasserstein_distance(
-                real_data[:, i].cpu().numpy(), generated_data[:, i].cpu().numpy()
-            )
+            stats.wasserstein_distance(real_data[:, i], generated_data[:, i])
         )
     return torch.tensor(distances).mean().item()
 
@@ -58,12 +111,13 @@ def rbf_kernel(x, y, sigma=1.0):
 
 def mmd_rbf(real_data, generated_data, sigma=1.0):
     """Compute the Maximum Mean Discrepancy (MMD) with RBF kernel."""
+    generated_data = generated_data.to(torch.float64)
     xx = rbf_kernel(real_data, real_data, sigma)
     yy = rbf_kernel(generated_data, generated_data, sigma)
     xy = rbf_kernel(real_data, generated_data, sigma)
 
     mmd = xx.mean() + yy.mean() - 2 * xy.mean()
-    return mmd.item()
+    return mmd
 
 
 def precision_recall_coverage(real_data, generated_data, k=5, threshold=0.5):
@@ -197,6 +251,7 @@ def load_dataset(
         )
 
     dataset = pd.read_parquet(path, columns=columns + ["count"])
+    dataset = dataset.round(decimals=2)
     dataset = dataset.groupby(columns, as_index=False).agg({"count": "sum"})
 
     if rel_p:
@@ -210,12 +265,29 @@ def load_dataset(
 
     sorted_header = sorted(regular_header) + sorted(conditioning_header)
     dataset = dataset.reindex(sorted_header, axis=1)
-    return_array = dataset.to_numpy()
+    # dataset = dataset[dataset["rel_probability"] > 0.6]
+    # s = [f"actions_{i}" for i in [0, 2, 4, 6, 8]]
+    # for ac in s:
+    #     dataset = dataset[dataset[ac] > 0]
+    # breakpoint()
+
+    # phi = [f"actions_{i}" for i in [1, 3, 5, 7, 9]]
+    # s = [f"actions_{i}" for i in [0, 2, 4, 6, 8]]
+    # dataset[s] = (dataset[s] - dataset[s].mean().mean()) / dataset[s].std().mean()
+    # dataset[phi] = (dataset[phi] - dataset[phi].mean().mean()) / dataset[
+    #     phi
+    # ].std().mean()
+    # dataset["theta_0"] = (dataset["theta_0"] - dataset["theta_0"].mean()) / dataset[
+    #     "theta_0"
+    # ].std()
+
+    # dataset = (dataset - dataset.mean()) / dataset.std()
+    # return_array = dataset.to_numpy()
     # ic(dataset.columns)
     # ic(dataset.min())
     # ic(dataset.max())
 
-    return return_array
+    return dataset
 
 
 if __name__ == "__main__":

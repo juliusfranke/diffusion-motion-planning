@@ -2,6 +2,7 @@ import time
 from typing import Dict, List
 
 import numpy as np
+from functools import partial
 import torch.nn as nn
 import torch.utils.data
 from icecream import ic
@@ -12,9 +13,16 @@ from pathlib import Path
 import logging
 from data import (
     get_violations,
-    precision_recall_coverage,
-    mmd_rbf,
     wasserstein_distance_pytorch,
+    mse,
+    mae,
+    log_cosh_loss,
+    clipped_mse_loss,
+    boundary_aware_loss,
+    weighted_mse_loss,
+    mmd_rbf,
+    sinkhorn,
+    mse_theta,
 )
 from torch.utils.tensorboard import SummaryWriter
 
@@ -64,7 +72,20 @@ class Net(nn.Module):
 
         for layer in self.linears:
             nn.init.kaiming_uniform_(layer.weight)
-        self.loss_fn = {"actions": self._loss_actions, "theta_0": self._loss_theta_0}
+        # self.loss_fn = {"actions": self._loss_actions, "theta_0": self._loss_theta_0}
+        max = torch.tensor([0.5] * 10 + [torch.pi, torch.inf], device=DEVICE)
+        loss_fns = {
+            "mse": mse,
+            "mae": mae,
+            "log_cosh": log_cosh_loss,
+            "clipped_mse": partial(clipped_mse_loss, max_val=max, min_val=-max),
+            "bound_aware": partial(boundary_aware_loss, max_val=max, min_val=-max),
+            "w_mse": partial(weighted_mse_loss, max_val=max[:-1], min_val=-max[:-1]),
+            "mmd": mmd_rbf,
+            "sinkhorn": sinkhorn,
+            "mse_theta": mse_theta,
+        }
+        self.loss = loss_fns[config["loss"]]
         logger.debug("Created Net")
 
     def save(self, epoch, pbar: tqdm):
@@ -75,24 +96,35 @@ class Net(nn.Module):
             logger.error("Model path not set")
             raise Exception
 
-    def loss(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
-        return torch.mean((noise[:, : self.output_size] - output) ** 2)
-        # idx = 0
-        # loss = torch.zeros(output.shape, device=DEVICE)
-        # for key, value in self.regular.items():
-        #     idx_to = value + idx
-        #     loss[:, idx:idx_to] = self.loss_fn[key](
-        #         output[:, idx:idx_to], noise[:, idx:idx_to]
-        #     )
-        #     idx += value
-        # return torch.mean(loss)
+    # def loss(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+    #     error = noise[:, : self.output_size] - output
+    #     return torch.mean(error**2)
+    # weights = torch.ones(self.output_size, device=DEVICE)
+    # weights[-1] = 1 / (2 * torch.pi)
+    # error = noise[:, : self.output_size] - output * weights
+    # return torch.mean(error**2)
+    # idx = 0
+    # loss = torch.zeros(output.shape, device=DEVICE)
+    # for key, value in self.regular.items():
+    #     idx_to = value + idx
+    #     loss[:, idx:idx_to] = self.loss_fn[key](
+    #         output[:, idx:idx_to], noise[:, idx:idx_to]
+    #     )
+    #     idx += value
+    # return torch.mean(loss)
 
     def forward(self, x):
         # x = torch.concat([x, t], dim=-1)
 
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
-        return self.linears[-1](x)
+        # out = self.linears[-1](x)
+        # out[:, -1] = (out[:, -1] + torch.pi) % (2 * torch.pi) - torch.pi
+        # return out
+        out = self.linears[-1](x)
+        # max = torch.tensor([0.5] * 10 + [torch.pi], device=DEVICE)
+        # out = torch.clamp(out, min=-max, max=max)
+        return out
 
     def _loss_actions(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
         assert output.shape[1] == 10
@@ -125,24 +157,26 @@ def get_alpha_betas(N: int):
     betas = np.array(
         [beta_min / N + i / (N * (N - 1)) * (beta_max - beta_min) for i in range(N)]
     )
-    # betas = np.random.uniform(10e-4, .02, N)  # schedule from the 2020 paper
+    # betas = np.random.uniform(10e-4, 0.02, N)  # schedule from the 2020 paper
     alpha_bars = np.cumprod(1 - betas)
     return alpha_bars, betas
 
 
-def train_epoch(
-    training_loader: DataLoader,
+def run_epoch(
+    data_loader: DataLoader,
     model: Net,
     optimizer,
     alpha_bars,
     denoising_steps: int,
+    validate=False,
 ):
 
     output_size = model.output_size
     running_loss = 0.0
-    for i, [data] in enumerate(training_loader):
+    for i, [data] in enumerate(data_loader):
         data = data.to(DEVICE)
-        optimizer.zero_grad()
+        if not validate:
+            optimizer.zero_grad()
 
         # Fwd pass
         t = torch.randint(
@@ -155,41 +189,83 @@ def train_epoch(
         noise = torch.randn(
             *data.shape, device=DEVICE
         )  # Sample DIFFERENT random noise for each datapoint
+        # max = torch.tensor([0.5] * 10 + [torch.pi, torch.inf], device=DEVICE)
+        # noise = torch.clamp(noise, min=-max, max=max)
+        # noise = (
+        #     torch.rand(*data.shape, device=DEVICE) - 0.5
+        # )  # Sample DIFFERENT random noise for each datapoint
+        # weight = torch.ones(noise.shape[1], device=DEVICE)
+        # weight[-1] = 2 * torch.pi
+        # noise = noise * weight
         model_in = (
             alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
         )  # Noise corrupt the data (eq14)
 
         x = torch.concat([model_in, t.unsqueeze(1).to(DEVICE)], dim=-1)
         out = model(x)
-        loss = torch.mean(
-            (noise[:, :output_size] - out) ** 2
-        )  # Compute loss on prediction (eq14)
-        loss = model.loss(out, noise)
+        # loss = torch.mean(
+        #     (noise[:, :output_size] - out) ** 2
+        # )  # Compute loss on prediction (eq14)
+        loss = model.loss(out, noise[:, :output_size])
 
         # losses.append(loss.detach().cpu().numpy())
         running_loss += loss.detach().cpu().numpy()
         # Bwd pass
-        loss.backward()
-        optimizer.step()
+        if not validate:
+            loss.backward()
+            optimizer.step()
 
-    model.info["train_metrics"]["loss/train"].append(running_loss / (i + 1))
+    if validate:
+        model.info["val_metrics"]["loss/val"].append(running_loss / (i + 1))
+    else:
+        model.info["train_metrics"]["loss/train"].append(running_loss / (i + 1))
 
 
 def val_epoch(
     validation_loader: DataLoader,
     model: Net,
+    denoising_steps: int,
 ):
 
     running_vloss = 0.0
     running_violations = 0.0
     running_violation_score = 0.0
 
+    hist_data = {
+        "s_real": [],
+        "s_pred": [],
+        "phi_real": [],
+        "phi_pred": [],
+        "theta_0_real": [],
+        "theta_0_pred": [],
+    }
     with torch.no_grad():
         for i, [vdata] in enumerate(validation_loader):
             regular = vdata[:, : model.output_size]
             conditioning = vdata[:, model.output_size :]
-            pred = sample(model, len(vdata), conditioning=conditioning)
-            val_loss = model.loss(regular, pred).detach().cpu().numpy()
+            pred = sample(
+                model,
+                len(vdata),
+                n_steps=denoising_steps,
+                conditioning=conditioning,
+            )
+            hist_data["s_real"].extend(regular[:, ::2][:, :5].flatten().detach().cpu())
+            hist_data["s_pred"].extend(pred[:, ::2][:, :5].flatten().detach().cpu())
+            hist_data["phi_real"].extend(
+                regular[:, 1::2][:, :5].flatten().detach().cpu()
+            )
+            hist_data["phi_pred"].extend(pred[:, 1::2][:, :5].flatten().detach().cpu())
+            if pred.shape[1] == 11:
+                hist_data["theta_0_real"].extend(
+                    regular[:, 10].flatten().detach().cpu()
+                )
+                hist_data["theta_0_pred"].extend(pred[:, 10].flatten().detach().cpu())
+            else:
+                hist_data["theta_0_real"].append(0)
+                hist_data["theta_0_pred"].append(0)
+            # phi = pred[:, 1::2][:, :5]
+            # theta_0 = pred[:, 10]
+            val_loss = model.loss(pred, regular).detach().cpu().numpy()
             running_vloss += val_loss
             violations, violation_score = get_violations(pred.detach().cpu().numpy())
             running_violations += violations
@@ -202,6 +278,8 @@ def val_epoch(
     model.info["val_metrics"]["loss/val"].append(avg_vloss)
     model.info["val_metrics"]["viol/percent"].append(avg_violations)
     model.info["val_metrics"]["viol/avg"].append(avg_violation_score)
+
+    return hist_data
 
 
 def test_epoch(
@@ -226,10 +304,9 @@ def train(
     model: Net,
     training_loader: DataLoader,
     validation_loader: DataLoader,
-    test_loader: DataLoader,
     tb_writer: SummaryWriter,
     nepochs: int = 10,
-    denoising_steps: int = 100,
+    denoising_steps: int = 50,
 ):
     """Alg 1 from the DDPM paper"""
     model.to(DEVICE)
@@ -242,13 +319,15 @@ def train(
     model.info["train_metrics"] = {"loss/train": []}
     model.info["val_metrics"] = {
         "loss/val": [],
-        "viol/percent": [],
-        "viol/avg": [],
+        # "viol/percent": [],
+        # "viol/avg": [],
     }
     model.info["test_metrics"] = {"loss/emd": []}
     try:
         for epoch in pbar:
-            train_epoch(
+            tb_writer.flush()
+            model.train()
+            run_epoch(
                 training_loader,
                 model,
                 optimizer,
@@ -264,25 +343,53 @@ def train(
             if (epoch + 1) % 10 != 0:
                 continue
             model.eval()
-            val_epoch(validation_loader, model)
+            run_epoch(
+                validation_loader,
+                model,
+                optimizer,
+                alpha_bars,
+                denoising_steps,
+                validate=True,
+            )
             for val_metric in model.info["val_metrics"].keys():
                 tb_writer.add_scalar(
-                    val_metric, model.info["val_metrics"][val_metric][-1], epoch + 1
-                )
-            if (epoch + 1) % 20 != 0:
-                continue
-            test_epoch(test_loader, model)
-            for test_metric in model.info["test_metrics"].keys():
-                tb_writer.add_scalar(
-                    test_metric, model.info["test_metrics"][test_metric][-1], epoch + 1
+                    val_metric,
+                    model.info["val_metrics"][val_metric][-1],
+                    epoch + 1,
                 )
             if (
-                np.argmin(model.info["test_metrics"]["loss/emd"])
-                == len(model.info["test_metrics"]["loss/emd"]) - 1
+                np.argmin(model.info["val_metrics"]["loss/val"])
+                == len(model.info["val_metrics"]["loss/val"]) - 1
             ):
                 model.save(epoch + 1, pbar)
-
-            tb_writer.flush()
+            # hist_data = val_epoch(validation_loader, model, denoising_steps)
+            # for val_metric in model.info["val_metrics"].keys():
+            #     tb_writer.add_scalar(
+            #         val_metric, model.info["val_metrics"][val_metric][-1], epoch + 1
+            #     )
+            # if (epoch + 1) % 20 != 0:
+            #     continue
+            # test_epoch(test_loader, model)
+            # for test_metric in model.info["test_metrics"].keys():
+            #     tb_writer.add_scalar(
+            #         test_metric, model.info["test_metrics"][test_metric][-1], epoch + 1
+            #     )
+            # if (
+            #     np.argmin(model.info["val_metrics"]["loss/val"])
+            #     == len(model.info["val_metrics"]["loss/val"]) - 1
+            # ):
+            #     for key, hist in hist_data.items():
+            #         if "theta" in key:
+            #             clip = 5
+            #         else:
+            #             clip = 1
+            #         tb_writer.add_histogram(
+            #             key,
+            #             np.clip(np.array(hist), a_min=-clip, a_max=clip),
+            #             epoch + 1,
+            #             bins=50,
+            #         )
+            #     model.save(epoch + 1, pbar)
 
     except KeyboardInterrupt:
         logger.info("Cancelled training (Keyboard Interrupt)")
@@ -300,9 +407,16 @@ def sample(
 ):
     """Alg 2 from the DDPM paper."""
     x_t = torch.randn((n_samples, trained_model.output_size)).to(DEVICE)
+    # max = torch.tensor([0.5] * 10 + [torch.pi], device=DEVICE)
+    # x_t = torch.clamp(x_t, min=-max, max=max)
+
+    # x_t = torch.rand((n_samples, trained_model.output_size)).to(DEVICE) - 0.5
+    # weight = torch.ones(trained_model.output_size, device=DEVICE)
+    # weight[-1] = 2 * torch.pi
+    # x_t = x_t * weight
 
     alpha_bars, betas = get_alpha_betas(n_steps)
-    alphas = 1 - betas
+    alphas = np.clip(1 - betas, 1e-8, np.inf)
     for t in range(len(alphas))[::-1]:
         ts = t * torch.ones((n_samples, 1)).to(DEVICE)
         ab_t = alpha_bars[t] * torch.ones((n_samples, 1)).to(
@@ -313,6 +427,12 @@ def sample(
             if t > 1
             else torch.zeros((n_samples, trained_model.output_size))
         ).to(DEVICE)
+        # z = torch.clamp(z, min=-max, max=max)
+        # z = (
+        #     torch.rand((n_samples, trained_model.output_size)) - 0.5
+        #     if t > 1
+        #     else torch.zeros((n_samples, trained_model.output_size))
+        # ).to(DEVICE)
 
         if trained_model.condition_size != 0 and isinstance(conditioning, torch.Tensor):
             if conditioning.shape[1] < 2:
