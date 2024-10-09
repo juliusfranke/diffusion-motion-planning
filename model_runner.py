@@ -386,8 +386,8 @@ def export(args: Dict) -> None:
         samples = sample(model, args["samples"]).detach().cpu().numpy()
     # print(f"Best steps: {best_steps} with {best_score}")
     # breakpoint()
-    violations, violation_score = get_violations(samples)
-    score = violation_score * violations
+    # violations, violation_score = get_violations(samples)
+    # score = violation_score * violations
     # print(f"{violation_score} * {violations} = {score}")
     sampleDict = outputToDict(samples, data_dict)
     sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5, 0.5)
@@ -396,9 +396,13 @@ def export(args: Dict) -> None:
 
     # ic(max(sampleDict["theta_0"]))
     # ic(min(sampleDict["theta_0"]))
-    sampleDict["theta_0"] = (sampleDict["theta_0"] + np.pi) % (2 * np.pi) - np.pi
+    if "theta_0" in sampleDict.keys():
+        sampleDict["theta_0"] = (sampleDict["theta_0"] + np.pi) % (2 * np.pi) - np.pi
+    else:
+        sampleDict["theta_0"] = np.arctan2(sampleDict["theta_0_y"], sampleDict["theta_0_x"]) 
     # ic(max(sampleDict["theta_0"]))
     # ic(min(sampleDict["theta_0"]))
+    # breakpoint()
     dt = 0.1
     outputList = []
     length = args["samples"]

@@ -17,6 +17,8 @@ PHI_MAX = np.pi / 3
 SUPP_REG = [
     "actions",
     "theta_0",
+    "theta_0_x",
+    "theta_0_y",
     "delta_0",
 ]
 SUPP_ENV = [
@@ -240,6 +242,7 @@ def load_dataset(
         SUPP_COMPLETE
     ), f"{[key for key in complete.keys() if key not in SUPP_COMPLETE]} are/is not implemented"
 
+        
     regular_header = get_header(regular)
     conditioning_header = get_header(conditioning)
     columns = regular_header + conditioning_header
