@@ -1,4 +1,5 @@
 from pathlib import Path
+from copy import deepcopy
 import numpy as np
 import pandas as pd
 from typing import Dict, List
@@ -17,8 +18,6 @@ PHI_MAX = np.pi / 3
 SUPP_REG = [
     "actions",
     "theta_0",
-    "theta_0_x",
-    "theta_0_y",
     "delta_0",
 ]
 SUPP_ENV = [
@@ -39,7 +38,8 @@ SUPP_ENV = [
     "cost",
     "location",
 ]
-SUPP_COMPLETE = SUPP_REG + SUPP_ENV + ["rel_probability"]
+SUPP_CALC = ["R2SVD", "R4SVD"]
+SUPP_COMPLETE = SUPP_REG + SUPP_ENV + SUPP_CALC + ["rel_probability"]
 
 sinkhorn_loss = SamplesLoss("sinkhorn", p=2, blur=0.05)
 
@@ -234,30 +234,74 @@ def get_header(dictionary: Dict[str, int]):
     ]
 
 
+def flatten_R4SVD(theta):
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+    return np.column_stack([cos_theta, -sin_theta, sin_theta, cos_theta])
+
+
+def flatten_R2SVD(theta):
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+    return np.column_stack([cos_theta, sin_theta])
+
+
 def load_dataset(
     path: Path, regular: Dict[str, int], conditioning: Dict[str, int]
 ) -> np.ndarray:
+    conditioning = deepcopy(conditioning)
+    regular = deepcopy(regular)
     complete = regular | conditioning
     assert set(complete.keys()) <= set(
         SUPP_COMPLETE
     ), f"{[key for key in complete.keys() if key not in SUPP_COMPLETE]} are/is not implemented"
 
-        
+    reg_calculate = {key: value for key, value in regular.items() if key in SUPP_CALC}
+    for calc in reg_calculate:
+        regular.pop(calc)
+
+    cond_calculate = {
+        key: value for key, value in conditioning.items() if key in SUPP_CALC
+    }
+    for calc in cond_calculate:
+        conditioning.pop(calc)
+
+    calculate = reg_calculate | cond_calculate
+
     regular_header = get_header(regular)
     conditioning_header = get_header(conditioning)
+    calc_header = get_header(calculate)
     columns = regular_header + conditioning_header
+    if "R4SVD" in calculate.keys() or "R2SVD" in calculate.keys():
+        columns.append("theta_0")
 
     rel_p = "rel_probability" in columns
     if rel_p:
         columns.remove(
             "rel_probability",
         )
+        columns.append("count")
 
-    dataset = pd.read_parquet(path, columns=columns + ["count"])
+    dataset = pd.read_parquet(
+        path, columns=columns, filters=[("p_obstacles", ">", 0.75)]
+    )
+    for calc in calculate.keys():
+        cols = get_header({calc: calculate[calc]})
+        if calc == "R4SVD":
+            flat_matrices = flatten_R4SVD(dataset["theta_0"])
+            flat_df = pd.DataFrame(flat_matrices, columns=cols)
+            dataset = pd.concat([dataset, flat_df], axis=1)
+            dataset.drop(columns="theta_0")
+        elif calc == "R2SVD":
+            flat_matrices = flatten_R2SVD(dataset["theta_0"])
+            flat_df = pd.DataFrame(flat_matrices, columns=cols)
+            dataset = pd.concat([dataset, flat_df], axis=1)
+            dataset.drop(columns="theta_0")
+
     dataset = dataset.round(decimals=2)
-    dataset = dataset.groupby(columns, as_index=False).agg({"count": "sum"})
 
     if rel_p:
+        dataset = dataset.groupby(columns, as_index=False).agg({"count": "sum"})
         env_group = [env_key for env_key in SUPP_ENV if env_key in complete.keys()]
         if env_group:
             dataset["group_max"] = dataset.groupby(env_group)["count"].transform("max")
@@ -265,32 +309,103 @@ def load_dataset(
             dataset["group_max"] = dataset["count"].max()
         dataset["rel_probability"] = dataset["count"] / dataset["group_max"]
         dataset.drop(columns=["group_max", "count"], inplace=True)
+    else:
+        dataset = dataset.drop_duplicates()
 
-    sorted_header = sorted(regular_header) + sorted(conditioning_header)
+    sorted_header = sorted(regular_header + calc_header) + sorted(conditioning_header)
+    ic(sorted_header)
     dataset = dataset.reindex(sorted_header, axis=1)
-    # dataset = dataset[dataset["rel_probability"] > 0.6]
-    # s = [f"actions_{i}" for i in [0, 2, 4, 6, 8]]
-    # for ac in s:
-    #     dataset = dataset[dataset[ac] > 0]
-    # breakpoint()
-
-    # phi = [f"actions_{i}" for i in [1, 3, 5, 7, 9]]
-    # s = [f"actions_{i}" for i in [0, 2, 4, 6, 8]]
-    # dataset[s] = (dataset[s] - dataset[s].mean().mean()) / dataset[s].std().mean()
-    # dataset[phi] = (dataset[phi] - dataset[phi].mean().mean()) / dataset[
-    #     phi
-    # ].std().mean()
-    # dataset["theta_0"] = (dataset["theta_0"] - dataset["theta_0"].mean()) / dataset[
-    #     "theta_0"
-    # ].std()
-
-    # dataset = (dataset - dataset.mean()) / dataset.std()
-    # return_array = dataset.to_numpy()
-    # ic(dataset.columns)
-    # ic(dataset.min())
-    # ic(dataset.max())
+    # ic(dataset.shape)
 
     return dataset
+
+
+def sym_orth_np(x_n):
+    R_n = x_n.shape[1]
+    n = 2
+    if R_n == 4:
+        x = x_n
+    else:
+        x = np.zeros((x_n.shape[0], 4))
+        x[:, 0] = x_n[:, 0]
+        x[:, 1] = -x_n[:, 1]
+        x[:, 2] = x_n[:, 1]
+        x[:, 3] = x_n[:, 0]
+
+    m = x.reshape(-1, n, n)
+    u, _, v = np.linalg.svd(m)
+    # vt = np.swapaxes(v, 1, 2)
+    vt = v
+    det = np.linalg.det(np.matmul(u, vt)).reshape(-1, 1, 1)
+    vt[:, -1:, :] *= det
+
+    r = np.matmul(u, vt)
+    return r.reshape(x.shape)
+
+
+def symmetric_orthogonalization(x_n, **kwargs):
+    assert len(x_n.shape) == 2, "Input array must be 2D"
+    assert x_n.shape[1] == 2 or x_n.shape[1] == 4, "Only R2 or R4 supported"
+
+    if isinstance(x_n, np.ndarray):
+        return sym_orth_np(x_n)
+    R_n = x_n.shape[1]
+    n = 2
+    if R_n == 4:
+        x = x_n
+    else:
+        x = torch.zeros((x_n.shape[0], 4), device=x_n.device)
+        x[:, 0] = x_n[:, 0]
+        x[:, 1] = -x_n[:, 1]
+        x[:, 2] = x_n[:, 1]
+        x[:, 3] = x_n[:, 0]
+    try:
+        m = x.view(-1, n, n)
+    except:
+        m = x.reshape(-1, n, n)
+
+    u, _, v = torch.svd(m)
+    vt = torch.transpose(v, 1, 2)
+    # vt = v
+    det = torch.det(torch.matmul(u, vt))
+    det = det.view(-1, 1, 1)
+    # breakpoint()
+    vt = torch.cat((vt[:, :1, :], vt[:, -1:, :] * det), 1)
+    r = torch.matmul(u, vt)
+    # print(r.shape, x.shape)
+    # breakpoint()
+    return r.view(*x.shape)
+
+
+def post_SVD(out_orig, regular: Dict):
+    idx = 0
+    out = out_orig.clone()
+    for outputType in sorted(regular.keys()):
+        length = regular[outputType]
+        # print(outputType, length, idx)
+        if outputType == "R4SVD":
+            out[:, idx : idx + length] = symmetric_orthogonalization(
+                out[:, idx : idx + length]
+            )
+        elif outputType == "R2SVD":
+            continue
+            # out[:, idx : idx + length] = torch.nn.functional.normalize(
+            #     out[:, idx : idx + length]
+            # )
+            # torch.nn.functional.normalize(out[:, idx : idx + length])
+
+            # sym_out = symmetric_orthogonalization(out[:, idx : idx + length])
+            # breakpoint()
+            # out[:, idx] = sym_out[:, 0]
+            # out[:, idx + 1] = sym_out[:, 2]
+        idx += length
+
+    # breakpoint()
+    return out
+
+
+def passthrough(x, *args):
+    return x
 
 
 if __name__ == "__main__":

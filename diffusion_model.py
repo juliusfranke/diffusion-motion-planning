@@ -23,9 +23,12 @@ from data import (
     mmd_rbf,
     sinkhorn,
     mse_theta,
+    post_SVD,
+    passthrough,
 )
 from torch.utils.tensorboard import SummaryWriter
 
+torch.autograd.set_detect_anomaly(True)
 logger = logging.getLogger(__name__)
 
 N_SEQ = 1_000
@@ -86,7 +89,15 @@ class Net(nn.Module):
             "mse_theta": mse_theta,
         }
         self.loss = loss_fns[config["loss"]]
+        if "R4SVD" in self.regular.keys() or "R2SVD" in self.regular.keys():
+            self.postprocessor = post_SVD
+        else:
+            self.postprocessor = passthrough
+
         logger.debug("Created Net")
+
+    def postprocess(self, x):
+        return self.postprocessor(x, self.regular)
 
     def save(self, epoch, pbar: tqdm):
         if isinstance(self.path, Path):
@@ -96,53 +107,12 @@ class Net(nn.Module):
             logger.error("Model path not set")
             raise Exception
 
-    # def loss(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
-    #     error = noise[:, : self.output_size] - output
-    #     return torch.mean(error**2)
-    # weights = torch.ones(self.output_size, device=DEVICE)
-    # weights[-1] = 1 / (2 * torch.pi)
-    # error = noise[:, : self.output_size] - output * weights
-    # return torch.mean(error**2)
-    # idx = 0
-    # loss = torch.zeros(output.shape, device=DEVICE)
-    # for key, value in self.regular.items():
-    #     idx_to = value + idx
-    #     loss[:, idx:idx_to] = self.loss_fn[key](
-    #         output[:, idx:idx_to], noise[:, idx:idx_to]
-    #     )
-    #     idx += value
-    # return torch.mean(loss)
-
     def forward(self, x):
-        # x = torch.concat([x, t], dim=-1)
 
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
-        # out = self.linears[-1](x)
-        # out[:, -1] = (out[:, -1] + torch.pi) % (2 * torch.pi) - torch.pi
-        # return out
         out = self.linears[-1](x)
-        # max = torch.tensor([0.5] * 10 + [torch.pi], device=DEVICE)
-        # out = torch.clamp(out, min=-max, max=max)
         return out
-
-    def _loss_actions(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
-        assert output.shape[1] == 10
-        assert noise.shape[1] == 10
-
-        return (noise - output) ** 2
-
-    def _loss_theta_0(self, output: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
-        assert output.shape[1] == 1
-        assert noise.shape[1] == 1
-
-        difference = noise - output
-        x = torch.cos(difference)
-        y = torch.sin(difference)
-        rel_dist = (torch.atan2(y, x) / np.pi) ** 2
-        # penalty = torch.gt(torch.abs(output), np.pi) * (torch.abs(output))**10
-        # rel_dist += penalty
-        return rel_dist
 
 
 def get_alpha_betas(N: int):
@@ -175,6 +145,7 @@ def run_epoch(
     running_loss = 0.0
     for i, [data] in enumerate(data_loader):
         data = data.to(DEVICE)
+
         if not validate:
             optimizer.zero_grad()
 
@@ -200,13 +171,19 @@ def run_epoch(
         model_in = (
             alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
         )  # Noise corrupt the data (eq14)
-
+        # model_in = model.postprocess(model_in)
         x = torch.concat([model_in, t.unsqueeze(1).to(DEVICE)], dim=-1)
         out = model(x)
-        # loss = torch.mean(
-        #     (noise[:, :output_size] - out) ** 2
-        # )  # Compute loss on prediction (eq14)
-        loss = model.loss(out, noise[:, :output_size])
+
+        loss = model.loss(
+            out,
+            noise[:, :output_size],
+        )
+        # loss = model.loss(
+        #     model.postprocess(out),
+        #     model.postprocess(noise[:, :output_size]),
+        # )
+        # breakpoint()
 
         # losses.append(loss.detach().cpu().numpy())
         running_loss += loss.detach().cpu().numpy()
@@ -406,7 +383,7 @@ def sample(
     conditioning: torch.Tensor | None = None,
 ):
     """Alg 2 from the DDPM paper."""
-    x_t = torch.randn((n_samples, trained_model.output_size)).to(DEVICE)
+    x_t = torch.randn((n_samples, trained_model.output_size), device=DEVICE)
     # max = torch.tensor([0.5] * 10 + [torch.pi], device=DEVICE)
     # x_t = torch.clamp(x_t, min=-max, max=max)
 
@@ -418,15 +395,14 @@ def sample(
     alpha_bars, betas = get_alpha_betas(n_steps)
     alphas = np.clip(1 - betas, 1e-8, np.inf)
     for t in range(len(alphas))[::-1]:
-        ts = t * torch.ones((n_samples, 1)).to(DEVICE)
-        ab_t = alpha_bars[t] * torch.ones((n_samples, 1)).to(
-            DEVICE
-        )  # Tile the alpha to the number of samples
+        ts = t * torch.ones((n_samples, 1), device=DEVICE)
+        ab_t = alpha_bars[t] * torch.ones((n_samples, 1), device=DEVICE)
+        # Tile the alpha to the number of samples
         z = (
-            torch.randn((n_samples, trained_model.output_size))
+            torch.randn((n_samples, trained_model.output_size), device=DEVICE)
             if t > 1
-            else torch.zeros((n_samples, trained_model.output_size))
-        ).to(DEVICE)
+            else torch.zeros((n_samples, trained_model.output_size), device=DEVICE)
+        )
         # z = torch.clamp(z, min=-max, max=max)
         # z = (
         #     torch.rand((n_samples, trained_model.output_size)) - 0.5
@@ -451,6 +427,7 @@ def sample(
                     - betas[t] / (1 - ab_t) ** 0.5 * model_prediction
                 )
             )
+            # breakpoint()
             x_t += betas[t] ** 0.5 * z
         else:
             model_prediction = trained_model(x_t, ts)
@@ -461,7 +438,7 @@ def sample(
             )
             x_t += betas[t] ** 0.5 * z
 
-    return x_t
+    return trained_model.postprocess(x_t)
 
 
 if __name__ == "__main__":

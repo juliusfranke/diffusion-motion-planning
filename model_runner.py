@@ -9,12 +9,14 @@ import torch
 import torch.utils.data
 import yaml
 import time
+import msgpack
 from data import (
     WeightSampler,
     pruneDataset,
     load_dataset,
     get_violations,
     SUPP_COMPLETE,
+    symmetric_orthogonalization,
 )
 from diffusion_model import DEVICE, Net, sample, train
 from icecream import ic
@@ -103,10 +105,15 @@ def outputToDict(modelOutput: np.ndarray, dataDict: Dict) -> Dict[str, np.ndarra
     idx = 0
     sampleSize = modelOutput.shape[0]
     for outputType, length in dataDict["regular"].items():
+        # print(outputType, length, idx)
         if outputType == "actions":
             returnDict[outputType] = modelOutput[:, idx : idx + length].reshape(
                 sampleSize, length // 2, 2
             )
+        # elif outputType == "R4SVD":
+        #     returnDict[outputType] = modelOutput[:, idx : idx + length].reshape(
+        #         sampleSize, 2, 2
+        #     )
         else:
             returnDict[outputType] = modelOutput[:, idx : idx + length]
         idx += length
@@ -133,7 +140,6 @@ def trainRun(args: Dict):
         key for key in data_dict["conditioning"].keys() if key != "rel_probability"
     ]
     cond_str = " + ".join(conditions)
-
     with open(model_path.with_suffix(".yaml"), "w") as file:
         yaml.safe_dump(data_dict, file, default_flow_style=None)
 
@@ -174,7 +180,7 @@ def trainRun(args: Dict):
     batch_size_train = min(len_training // 10, 4096)
     batch_size_val = min(len_validation // 10, 4096)
     logger.debug(f"Batch size: {batch_size_train}")
-
+    # breakpoint()
     training_loader = DataLoader(
         training_set, batch_size=batch_size_train, shuffle=True
     )
@@ -254,7 +260,7 @@ def trainRun(args: Dict):
 def loadRun(args: Dict):
     model, data_dict = loadModel(modelName=args["model"])
     ws = WeightSampler()
-    cdf = torch.Tensor(ws.rvs(size=args["samples"])).to(DEVICE)
+    cdf = torch.Tensor(ws.rvs(size=args["samples"]), device=DEVICE)
     # cdf = torch.Tensor(ws.ppf(np.linspace(0,1,args["samples"]))).to(DEVICE)
     # cdf = torch.Tensor(np.linspace(0,1,args["samples"])**10).to(DEVICE)
     samples = sample(model, args["samples"], conditioning=cdf).detach().cpu().numpy()
@@ -398,8 +404,16 @@ def export(args: Dict) -> None:
     # ic(min(sampleDict["theta_0"]))
     if "theta_0" in sampleDict.keys():
         sampleDict["theta_0"] = (sampleDict["theta_0"] + np.pi) % (2 * np.pi) - np.pi
-    else:
-        sampleDict["theta_0"] = np.arctan2(sampleDict["theta_0_y"], sampleDict["theta_0_x"]) 
+    elif "R4SVD" in sampleDict.keys():
+        x = sampleDict["R4SVD"][:, 0]
+        y = sampleDict["R4SVD"][:, 2]
+        sampleDict["theta_0"] = np.arctan2(y, x)
+        sampleDict.pop("R4SVD")
+    elif "R2SVD" in sampleDict.keys():
+        x = sampleDict["R2SVD"][:, 0]
+        y = sampleDict["R2SVD"][:, 1]
+        sampleDict["theta_0"] = np.arctan2(y, x)
+        sampleDict.pop("R2SVD")
     # ic(max(sampleDict["theta_0"]))
     # ic(min(sampleDict["theta_0"]))
     # breakpoint()
@@ -436,14 +450,33 @@ def export(args: Dict) -> None:
         tempDict["states"] = states.tolist()
         tempDict["num_actions"] = numActions
         outputList.append(tempDict)
+    # for i, (actions, states) in enumerate(dataset):
+    #     tempDict = {
+    #         "actions": actions.tolist(),
+    #         "states": states.tolist(),
+    #         "T": len(actions),
+    #         "x0": states[0].tolist(),
+    #         "xf": states[-1].tolist(),
+    #         "name": f"m{i}",
+    #     }
+    # numActions = len(actions)
+    # tempDict["T"] = numActions
+    # tempDict["states"] = states.tolist()
+    # tempDict["x0"] = states[0].tolist()
+    # tempDict["xf"] = states[-1].tolist()
+    # tempDict["name"] = f"m{i}"
+    # outputList.append(tempDict)
 
     # breakpoint()
     # ic(len(outputList))
     if args["out"] is None:
-        out = f"output/model_unicycle_bugtrap_n{length}_l5.yaml"
+        out = f"output/model_unicycle_bugtrap_n{length}_l5.msgpack"
     else:
         out = args["out"]
     Path(out).parents[0].mkdir(parents=True, exist_ok=True)
+    # with open(out, "wb") as file:
+    #     packed = msgpack.packb(outputList)
+    #     file.write(packed)
     with open(out, "w") as file:
         yaml.safe_dump(outputList, file, default_flow_style=None)
 
