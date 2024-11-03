@@ -1,6 +1,5 @@
 from pathlib import Path
 from typing import Dict, Tuple
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -14,11 +13,13 @@ from data import (
     WeightSampler,
     pruneDataset,
     load_dataset,
+    load_allocator_dataset,
+    sorted_nicely,
     get_violations,
     SUPP_COMPLETE,
     symmetric_orthogonalization,
 )
-from diffusion_model import DEVICE, Net, sample, train
+from diffusion_model import DEVICE, Net, sample, train_normal
 from icecream import ic
 from torch.utils.data import DataLoader, TensorDataset
 import logging
@@ -104,7 +105,8 @@ def outputToDict(modelOutput: np.ndarray, dataDict: Dict) -> Dict[str, np.ndarra
     returnDict = {}
     idx = 0
     sampleSize = modelOutput.shape[0]
-    for outputType, length in dataDict["regular"].items():
+    for outputType in sorted_nicely(dataDict["regular"].keys()):
+        length = dataDict["regular"][outputType]
         # print(outputType, length, idx)
         if outputType == "actions":
             returnDict[outputType] = modelOutput[:, idx : idx + length].reshape(
@@ -125,21 +127,40 @@ def plotError(errorData) -> None:
 
 
 def trainRun(args: Dict):
+    with open(args["config"], "r") as file:
+        data_dict = yaml.safe_load(file)
+    if "cascade" in data_dict.keys():
+        trainComposite(args, data_dict)
+    else:
+        trainSingle(args, data_dict)
+
+
+def trainComposite(args: Dict, data_dict: Dict):
+    assert set(data_dict["regular"].keys()) == set(data_dict["cascade"].keys())
+
+    dataset_folder = Path(args["dataset"])
+    model_path = (Path("data/models/") / args["name"]).with_suffix(".pt")
+    if model_path.exists():
+        if input(f"{model_path} already exists, overwrite? (y/n) ") != "y":
+            return None
+
+    with open(model_path.with_suffix(".yaml"), "w") as file:
+        yaml.safe_dump(data_dict, file, default_flow_style=None)
+    # Train allocator
+    data = load_allocator_dataset(
+        dataset_folder, data_dict["regular"], data_dict["conditioning"]
+    ).to_numpy()
+    trainModel(args, data_dict, data, model_path)
+
+
+def trainSingle(args: Dict, data_dict: Dict):
     name = args["name"]
     model_path = (Path("data/models/") / name).with_suffix(".pt")
     if model_path.exists():
         if input(f"{model_path} already exists, overwrite? (y/n) ") != "y":
             return None
     logger.info(f"Device: {DEVICE}")
-    training_size = args["trainingsize"]
-    val_split = args["valsplit"]
 
-    with open(args["config"], "r") as file:
-        data_dict = yaml.safe_load(file)
-    conditions = [
-        key for key in data_dict["conditioning"].keys() if key != "rel_probability"
-    ]
-    cond_str = " + ".join(conditions)
     with open(model_path.with_suffix(".yaml"), "w") as file:
         yaml.safe_dump(data_dict, file, default_flow_style=None)
 
@@ -148,12 +169,18 @@ def trainRun(args: Dict):
         regular=data_dict["regular"],
         conditioning=data_dict["conditioning"],
     ).to_numpy()
+    trainModel(args, data_dict, data, model_path)
 
-    # test_data = load_dataset(
-    #     "data/training_datasets/rand_env_l5_test.parquet",
-    #     regular=data_dict["regular"],
-    #     conditioning=data_dict["conditioning"],
-    # )
+
+def trainModel(args: Dict, data_dict: Dict, data: np.ndarray, model_path: Path):
+    name = args["name"]
+    training_size = args["trainingsize"]
+    val_split = args["valsplit"]
+
+    conditions = [
+        key for key in data_dict["conditioning"].keys() if key != "rel_probability"
+    ]
+    cond_str = " + ".join(conditions)
     logger.info(f"Dataset size: {data.shape[0]}")
 
     dataset = TensorDataset(torch.tensor(data, device=DEVICE))
@@ -200,7 +227,7 @@ def trainRun(args: Dict):
     # for regular, size in data_dict["regular"].items():
     #     tb_writer.add_text(str(regular), str(size))
     start = time.time()
-    trained_model = train(
+    trained_model = train_normal(
         model,
         training_loader,
         validation_loader,
@@ -276,26 +303,55 @@ def loadRun(args: Dict):
 
 def export(args: Dict) -> None:
     model, data_dict = loadModel(modelName=args["model"])
+    instance_path = args["instance"]
+    length = args["samples"]
+    with open(instance_path, "r") as file:
+        instance_data = yaml.safe_load(file)
 
+    if "cascade" in data_dict.keys():
+        data = sampleCascade(args, data_dict, instance_data, model)
+    else:
+        data = sampleToPrimitive(
+            sampleSingle(args, data_dict, instance_data, model), data_dict
+        )
+
+    if args["out"] is None:
+        out = f"output/model_unicycle_bugtrap_n{length}_l5.msgpack"
+    else:
+        out = args["out"]
+    Path(out).parents[0].mkdir(parents=True, exist_ok=True)
+    # with open(out, "wb") as file:
+    #     packed = msgpack.packb(outputList)
+    #     file.write(packed)
+    with open(out, "w") as file:
+        yaml.safe_dump(data, file, default_flow_style=None)
+
+
+def sampleCascade(
+    args: Dict, allocator_dict: Dict, instance_data: Dict, allocator_model: Net
+):
+    allocator = sampleSingle(args, allocator_dict, instance_data, allocator_model)
+    _, counts = np.unique(np.argmax(allocator, axis=1), return_counts=True)
+    data = []
+    for model_name, count in zip(
+        sorted_nicely(allocator_dict["cascade"].values()), counts
+    ):
+        model, data_dict = loadModel(modelName=model_name)
+        args["samples"] = count
+        samples = sampleSingle(args, data_dict, instance_data, model)
+        data.extend(sampleToPrimitive(samples, data_dict))
+
+    return data
+
+
+def sampleSingle(args: Dict, data_dict: Dict, instance_data: Dict, model: Net):
     ws = WeightSampler()
     if data_dict["conditioning"]:
-        instance_path = args["instance"]
-        with open(instance_path, "r") as file:
-            instance_data = yaml.safe_load(file)
         env_data = instance_data["environment"]
 
-        conditions = sorted(
-            [
-                key
-                for key in data_dict["conditioning"].keys()
-                # if key != "rel_probability"
-            ]
-        )
+        conditions = sorted_nicely([key for key in data_dict["conditioning"].keys()])
         conditioning = []
         for condition in conditions:
-            # if condition not in dataDict["conditioning"].keys():
-            #     continue
-            # else:
             size = data_dict["conditioning"][condition]
             # print(f"Adding {condition}")
             # if condition == "rel_probability":
@@ -369,39 +425,16 @@ def export(args: Dict) -> None:
             .cpu()
             .numpy()
         )
-        # samples = []
-        # best_score = np.inf
-        # best_steps = None
-
-        # for steps in [50, 100, 150, 200, 250, 300, 350, 400]:
-        #     samples_ = (
-        #         sample(model, args["samples"], conditioning=conditioning,n_steps=steps)
-        #         .detach()
-        #         .cpu()
-        #         .numpy()
-        #     )
-        #     violations, violation_score = getViolations(samples_)
-        #     score = violation_score * violations
-        #     print(f"{steps} steps : {violation_score} * {violations} = {score}" )
-        #     if score < best_score:
-        #         samples = samples_
-        #         best_score = score
-        #         best_steps = steps
 
     else:
         samples = sample(model, args["samples"]).detach().cpu().numpy()
-    # print(f"Best steps: {best_steps} with {best_score}")
-    # breakpoint()
-    # violations, violation_score = get_violations(samples)
-    # score = violation_score * violations
-    # print(f"{violation_score} * {violations} = {score}")
+    return samples
+
+
+def sampleToPrimitive(samples, data_dict):
     sampleDict = outputToDict(samples, data_dict)
     sampleDict["actions"] = np.clip(sampleDict["actions"], -0.5, 0.5)
-    # breakpoint()
-    # sampleDict["theta_0"] = np.sign(sampleDict["theta_0"]) * np.abs(sampleDict["theta_0"]) % np.pi
 
-    # ic(max(sampleDict["theta_0"]))
-    # ic(min(sampleDict["theta_0"]))
     if "theta_0" in sampleDict.keys():
         sampleDict["theta_0"] = (sampleDict["theta_0"] + np.pi) % (2 * np.pi) - np.pi
     elif "R4SVD" in sampleDict.keys():
@@ -419,9 +452,10 @@ def export(args: Dict) -> None:
     # breakpoint()
     dt = 0.1
     outputList = []
-    length = args["samples"]
+
+    # TODO remove this
     dataset, limit = pruneDataset(
-        sampleDict["actions"], sampleDict["theta_0"], length=length
+        sampleDict["actions"], sampleDict["theta_0"], length=len(sampleDict["actions"])
     )
     for actions, states in dataset:
         tempDict = {
@@ -450,6 +484,7 @@ def export(args: Dict) -> None:
         tempDict["states"] = states.tolist()
         tempDict["num_actions"] = numActions
         outputList.append(tempDict)
+    return outputList
     # for i, (actions, states) in enumerate(dataset):
     #     tempDict = {
     #         "actions": actions.tolist(),
@@ -469,16 +504,6 @@ def export(args: Dict) -> None:
 
     # breakpoint()
     # ic(len(outputList))
-    if args["out"] is None:
-        out = f"output/model_unicycle_bugtrap_n{length}_l5.msgpack"
-    else:
-        out = args["out"]
-    Path(out).parents[0].mkdir(parents=True, exist_ok=True)
-    # with open(out, "wb") as file:
-    #     packed = msgpack.packb(outputList)
-    #     file.write(packed)
-    with open(out, "w") as file:
-        yaml.safe_dump(outputList, file, default_flow_style=None)
 
 
 def listRun():

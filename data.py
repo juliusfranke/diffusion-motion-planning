@@ -7,8 +7,10 @@ from icecream import ic
 import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.neighbors import NearestNeighbors
+from torch.utils.data import DataLoader, TensorDataset
 import torch
 from geomloss import SamplesLoss
+import re
 
 S_MIN = -1
 S_MAX = 2
@@ -42,6 +44,13 @@ SUPP_CALC = ["R2SVD", "R4SVD"]
 SUPP_COMPLETE = SUPP_REG + SUPP_ENV + SUPP_CALC + ["rel_probability"]
 
 sinkhorn_loss = SamplesLoss("sinkhorn", p=2, blur=0.05)
+
+
+def sorted_nicely(l):
+    """Sort the given iterable in the way that humans expect."""
+    convert = lambda text: int(text) if text.isdigit() else text
+    alphanum_key = lambda key: [convert(c) for c in re.split("([0-9]+)", key)]
+    return sorted(l, key=alphanum_key)
 
 
 def sinkhorn(real: torch.Tensor, pred: torch.Tensor):
@@ -281,7 +290,6 @@ def load_dataset(
             "rel_probability",
         )
         columns.append("count")
-
     dataset = pd.read_parquet(
         path, columns=columns, filters=[("p_obstacles", ">", 0.75)]
     )
@@ -312,10 +320,60 @@ def load_dataset(
     else:
         dataset = dataset.drop_duplicates()
 
-    sorted_header = sorted(regular_header + calc_header) + sorted(conditioning_header)
+    sorted_header = sorted_nicely(regular_header + calc_header) + sorted_nicely(
+        conditioning_header
+    )
     ic(sorted_header)
     dataset = dataset.reindex(sorted_header, axis=1)
     # ic(dataset.shape)
+
+    return dataset
+
+
+def old_load_allocator_dataset(path: Path, regular: Dict, conditioning: Dict):
+    regular_header = get_header(regular)
+    conditioning_header = get_header(conditioning)
+    dataset = None
+    for model in regular.keys():
+        model_ds_path = (path / model).with_suffix(".parquet")
+        model_ds = pd.read_parquet(model_ds_path, columns=conditioning.keys())
+        model_ds = model_ds.value_counts().reset_index()
+        model_ds.rename(columns={"count": model}, inplace=True)
+        if isinstance(dataset, pd.DataFrame):
+            dataset = dataset.merge(model_ds, how="outer", on=list(conditioning.keys()))
+        else:
+            dataset = model_ds
+    dataset["total"] = dataset[list(regular.keys())].sum(axis=1)
+    for model in regular.keys():
+        dataset[model] = dataset[model] / dataset["total"]
+    dataset.drop(columns="total", inplace=True)
+
+    sorted_header = sorted_nicely(regular_header) + sorted_nicely(conditioning_header)
+    ic(sorted_header)
+    dataset = dataset.reindex(sorted_header, axis=1)
+
+    return dataset
+
+
+def load_allocator_dataset(path: Path, regular: Dict, conditioning: Dict):
+    regular_header = get_header(regular)
+    conditioning_header = get_header(conditioning)
+    dataset = []
+    for model in regular.keys():
+        model_ds_path = (path / model).with_suffix(".parquet")
+        model_ds = pd.read_parquet(
+            model_ds_path,
+            columns=conditioning.keys(),
+            filters=[("p_obstacles", ">", 0.75)],
+        )
+        for other_model in regular.keys():
+            model_ds[other_model] = int(model == other_model)
+        dataset.append(model_ds)
+
+    dataset = pd.concat(dataset)
+    sorted_header = sorted_nicely(regular_header) + sorted_nicely(conditioning_header)
+    ic(sorted_header)
+    dataset = dataset.reindex(sorted_header, axis=1)
 
     return dataset
 
@@ -406,6 +464,17 @@ def post_SVD(out_orig, regular: Dict):
 
 def passthrough(x, *args):
     return x
+
+
+def load_data(data_dict):
+    data = load_dataset(
+        data_dict["dataset"],
+        regular=data_dict["regular"],
+        conditioning=data_dict["conditioning"],
+    ).to_numpy()
+    trainset = TensorDataset(torch.tensor(data, device=data_dict["device"]))
+
+    return trainset, None
 
 
 if __name__ == "__main__":

@@ -1,17 +1,20 @@
 import time
 from typing import Dict, List
-
+import tempfile
 import numpy as np
 from functools import partial
 import torch.nn as nn
 import torch.utils.data
 from icecream import ic
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
+from ray import train
+from ray.train import Checkpoint, get_checkpoint
+import ray.cloudpickle as pickle
 from tqdm import tqdm
-from tqdm._utils import _term_move_up
 from pathlib import Path
 import logging
 from data import (
+    load_data,
     get_violations,
     wasserstein_distance_pytorch,
     mse,
@@ -198,86 +201,102 @@ def run_epoch(
         model.info["train_metrics"]["loss/train"].append(running_loss / (i + 1))
 
 
-def val_epoch(
-    validation_loader: DataLoader,
-    model: Net,
-    denoising_steps: int,
+def train_raytune(
+    config: Dict,
+    model_static: Dict,
+    nepochs: int = 10,
 ):
+    """Alg 1 from the DDPM paper"""
+    data_dict = config | model_static
+    denoising_steps = data_dict["denoising_steps"]
+    lr = data_dict["lr"]
+    model = Net(data_dict)
+    model.to(DEVICE)
+    model.info["lr"] = lr
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    alpha_bars, _ = get_alpha_betas(denoising_steps)  # Precompute alphas
 
-    running_vloss = 0.0
-    running_violations = 0.0
-    running_violation_score = 0.0
-
-    hist_data = {
-        "s_real": [],
-        "s_pred": [],
-        "phi_real": [],
-        "phi_pred": [],
-        "theta_0_real": [],
-        "theta_0_pred": [],
+    model.info["train_metrics"] = {"loss/train": []}
+    model.info["val_metrics"] = {
+        "loss/val": [],
     }
-    with torch.no_grad():
-        for i, [vdata] in enumerate(validation_loader):
-            regular = vdata[:, : model.output_size]
-            conditioning = vdata[:, model.output_size :]
-            pred = sample(
-                model,
-                len(vdata),
-                n_steps=denoising_steps,
-                conditioning=conditioning,
+    checkpoint = get_checkpoint()
+    if checkpoint:
+        with checkpoint.as_directory() as checkpoint_dir:
+            data_path = Path(checkpoint_dir) / "data.pkl"
+            with open(data_path, "rb") as fp:
+                checkpoint_state = pickle.load(fp)
+            start_epoch = checkpoint_state["epoch"]
+            model.load_state_dict(checkpoint_state["net_state_dict"])
+            optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
+    else:
+        start_epoch = 0
+    pbar = tqdm(range(start_epoch, nepochs))
+
+    trainset, testset = load_data(data_dict)
+
+    test_abs = int(len(trainset) * 0.8)
+    train_subset, val_subset = random_split(
+        trainset, [test_abs, len(trainset) - test_abs]
+    )
+
+    training_loader = torch.utils.data.DataLoader(
+        train_subset,
+        batch_size=int(data_dict["batch_size"]),
+        shuffle=True,
+        num_workers=8,
+    )
+    validation_loader = torch.utils.data.DataLoader(
+        val_subset, batch_size=int(data_dict["batch_size"]), shuffle=True, num_workers=8
+    )
+
+    for epoch in pbar:
+        model.train()
+        run_epoch(
+            training_loader,
+            model,
+            optimizer,
+            alpha_bars,
+            denoising_steps,
+            validate=False,
+        )
+
+        model.eval()
+        run_epoch(
+            validation_loader,
+            model,
+            optimizer,
+            alpha_bars,
+            denoising_steps,
+            validate=True,
+        )
+        # idx_best = np.argmin(model.info["val_metrics"]["loss/val"])
+        # val_step = len(model.info["val_metrics"]["loss/val"]) - 1
+
+        checkpoint_data = {
+            "epoch": epoch,
+            "net_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+        }
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            data_path = Path(checkpoint_dir) / "data.pkl"
+            with open(data_path, "wb") as fp:
+                pickle.dump(checkpoint_data, fp)
+
+            checkpoint = Checkpoint.from_directory(checkpoint_dir)
+            train.report(
+                {"loss": model.info["val_metrics"]["loss/val"][-1]},
+                checkpoint=checkpoint,
             )
-            hist_data["s_real"].extend(regular[:, ::2][:, :5].flatten().detach().cpu())
-            hist_data["s_pred"].extend(pred[:, ::2][:, :5].flatten().detach().cpu())
-            hist_data["phi_real"].extend(
-                regular[:, 1::2][:, :5].flatten().detach().cpu()
-            )
-            hist_data["phi_pred"].extend(pred[:, 1::2][:, :5].flatten().detach().cpu())
-            if pred.shape[1] == 11:
-                hist_data["theta_0_real"].extend(
-                    regular[:, 10].flatten().detach().cpu()
-                )
-                hist_data["theta_0_pred"].extend(pred[:, 10].flatten().detach().cpu())
-            else:
-                hist_data["theta_0_real"].append(0)
-                hist_data["theta_0_pred"].append(0)
-            # phi = pred[:, 1::2][:, :5]
-            # theta_0 = pred[:, 10]
-            val_loss = model.loss(pred, regular).detach().cpu().numpy()
-            running_vloss += val_loss
-            violations, violation_score = get_violations(pred.detach().cpu().numpy())
-            running_violations += violations
-            running_violation_score += violation_score
 
-    avg_vloss = running_vloss / (i + 1)
-    avg_violations = running_violations / (i + 1)
-    avg_violation_score = running_violation_score / (i + 1)
+    pbar.close()
 
-    model.info["val_metrics"]["loss/val"].append(avg_vloss)
-    model.info["val_metrics"]["viol/percent"].append(avg_violations)
-    model.info["val_metrics"]["viol/avg"].append(avg_violation_score)
+    model.info["epochs"] = epoch + 1
 
-    return hist_data
+    # return model
 
 
-def test_epoch(
-    test_loader: DataLoader,
-    model: Net,
-):
-
-    assert len(test_loader) == 1
-    with torch.no_grad():
-        for [test_data] in test_loader:
-            regular = test_data[:, : model.output_size]
-            conditioning = test_data[:, model.output_size :]
-            pred = sample(model, len(test_data), conditioning=conditioning)
-            # mmd = mmd_rbf(regular, pred)
-            emd = wasserstein_distance_pytorch(regular, pred)
-
-    # model.info["test_metrics"]["loss/mmd"].append(mmd)
-    model.info["test_metrics"]["loss/emd"].append(emd)
-
-
-def train(
+def train_normal(
     model: Net,
     training_loader: DataLoader,
     validation_loader: DataLoader,
@@ -296,10 +315,9 @@ def train(
     model.info["train_metrics"] = {"loss/train": []}
     model.info["val_metrics"] = {
         "loss/val": [],
-        # "viol/percent": [],
-        # "viol/avg": [],
     }
     model.info["test_metrics"] = {"loss/emd": []}
+
     try:
         for epoch in pbar:
             tb_writer.flush()
@@ -334,42 +352,17 @@ def train(
                     model.info["val_metrics"][val_metric][-1],
                     epoch + 1,
                 )
-            if (
-                np.argmin(model.info["val_metrics"]["loss/val"])
-                == len(model.info["val_metrics"]["loss/val"]) - 1
-            ):
+            idx_best = np.argmin(model.info["val_metrics"]["loss/val"])
+            val_step = len(model.info["val_metrics"]["loss/val"]) - 1
+            if idx_best == val_step:
                 model.save(epoch + 1, pbar)
-            # hist_data = val_epoch(validation_loader, model, denoising_steps)
-            # for val_metric in model.info["val_metrics"].keys():
-            #     tb_writer.add_scalar(
-            #         val_metric, model.info["val_metrics"][val_metric][-1], epoch + 1
-            #     )
-            # if (epoch + 1) % 20 != 0:
-            #     continue
-            # test_epoch(test_loader, model)
-            # for test_metric in model.info["test_metrics"].keys():
-            #     tb_writer.add_scalar(
-            #         test_metric, model.info["test_metrics"][test_metric][-1], epoch + 1
-            #     )
-            # if (
-            #     np.argmin(model.info["val_metrics"]["loss/val"])
-            #     == len(model.info["val_metrics"]["loss/val"]) - 1
-            # ):
-            #     for key, hist in hist_data.items():
-            #         if "theta" in key:
-            #             clip = 5
-            #         else:
-            #             clip = 1
-            #         tb_writer.add_histogram(
-            #             key,
-            #             np.clip(np.array(hist), a_min=-clip, a_max=clip),
-            #             epoch + 1,
-            #             bins=50,
-            #         )
-            #     model.save(epoch + 1, pbar)
+            elif val_step - idx_best >= 100:
+                logger.info("Cancelled training after 1000 epochs with no improvements")
+                break
 
     except KeyboardInterrupt:
         logger.info("Cancelled training (Keyboard Interrupt)")
+    pbar.close()
 
     model.info["epochs"] = epoch + 1
 
