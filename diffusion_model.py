@@ -46,10 +46,13 @@ class Net(nn.Module):
         logger.debug("Creating Net")
         self.regular: Dict[str, int] = config["regular"]
         self.conditioning: Dict[str, int] = config["conditioning"]
-        self.validate: Dict[str, int] = self.regular | self.conditioning
+        # self.validate: Dict[str, int] = self.regular | self.conditioning
 
         self.output_size = sum(self.regular.values())
-        self.condition_size = sum(self.conditioning.values())
+        if self.conditioning != None:
+            self.condition_size = sum(self.conditioning.values())
+        else:
+            self.condition_size = 0
         self.input_size = self.output_size + self.condition_size + 1
 
         self.info = config.copy()
@@ -63,10 +66,22 @@ class Net(nn.Module):
             logger.debug(f"{regular} : {self.regular[regular]}")
 
         logger.debug("Conditioning")
-        for condition in self.conditioning.keys():
-            logger.debug(f"{condition} : {self.conditioning[condition]}")
+        if self.conditioning != None:
+            for condition in self.conditioning.keys():
+                logger.debug(f"{condition} : {self.conditioning[condition]}")
+
+        # self.input_projection = nn.Linear(
+        #     self.input_size, config["s_hidden"], dtype=torch.float64
+        # )
+        # self.positional_encoding = nn.Parameter(torch.randn(config["s_hidden"]))
+        # transformer_layer = nn.TransformerEncoderLayer(
+        #     d_model=config["s_hidden"], nhead=2, dtype=torch.float64, batch_first=True
+        # )
+        # self.transformer = nn.TransformerEncoder(transformer_layer, num_layers=1)
 
         layers = [nn.Linear(self.input_size, config["s_hidden"], dtype=torch.float64)]
+        # layers = []
+
         for _ in range(config["n_hidden"]):
             layers.append(
                 nn.Linear(config["s_hidden"], config["s_hidden"], dtype=torch.float64)
@@ -105,15 +120,17 @@ class Net(nn.Module):
     def save(self, epoch, pbar: tqdm):
         if isinstance(self.path, Path):
             torch.save(self.state_dict(), self.path)
-            pbar.set_description(f"Saved @ epoch {epoch}")
         else:
             logger.error("Model path not set")
             raise Exception
 
     def forward(self, x):
-
+        # x = self.input_projection(x) + self.positional_encoding
+        # x += self.positional_encoding
+        # x = self.transformer(x)
         for layer in self.linears[:-1]:
             x = nn.ReLU()(layer(x))
+            # x = nn.LeakyReLU()(layer(x))
         out = self.linears[-1](x)
         return out
 
@@ -148,6 +165,8 @@ def run_epoch(
     running_loss = 0.0
     for i, [data] in enumerate(data_loader):
         data = data.to(DEVICE)
+        condition = data[:, output_size:]
+        data = data[:, :output_size]
 
         if not validate:
             optimizer.zero_grad()
@@ -171,17 +190,18 @@ def run_epoch(
         # weight = torch.ones(noise.shape[1], device=DEVICE)
         # weight[-1] = 2 * torch.pi
         # noise = noise * weight
-        model_in = (
+        data_noised = (
             alpha_t**0.5 * data + noise * (1 - alpha_t) ** 0.5
         )  # Noise corrupt the data (eq14)
         # model_in = model.postprocess(model_in)
-        x = torch.concat([model_in, t.unsqueeze(1).to(DEVICE)], dim=-1)
+        x = torch.concat([data_noised, condition, t.unsqueeze(1).to(DEVICE)], dim=-1)
         out = model(x)
 
         loss = model.loss(
             out,
             noise[:, :output_size],
         )
+        # loss = model.loss(out, data[:, :output_size])
         # loss = model.loss(
         #     model.postprocess(out),
         #     model.postprocess(noise[:, :output_size]),
@@ -208,8 +228,17 @@ def train_raytune(
 ):
     """Alg 1 from the DDPM paper"""
     data_dict = config | model_static
-    denoising_steps = data_dict["denoising_steps"]
+    print(data_dict["conditioning"])
+    data_dict["conditioning"] = {
+        key: value for key, value in data_dict["conditioning"].items() if value != 0
+    }
+    data_dict["s_hidden"] = int(data_dict["s_hidden"])
+    data_dict["n_hidden"] = int(data_dict["n_hidden"])
+    data_dict["denoising_steps"] = int(data_dict["denoising_steps"])
+    denoising_steps = int(data_dict["denoising_steps"])
+    # denoising_steps = 50
     lr = data_dict["lr"]
+    # lr = 1e-3
     model = Net(data_dict)
     model.to(DEVICE)
     model.info["lr"] = lr
@@ -221,6 +250,7 @@ def train_raytune(
         "loss/val": [],
     }
     checkpoint = get_checkpoint()
+    # checkpoint = None
     if checkpoint:
         with checkpoint.as_directory() as checkpoint_dir:
             data_path = Path(checkpoint_dir) / "data.pkl"
@@ -231,10 +261,16 @@ def train_raytune(
             optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
     else:
         start_epoch = 0
-    pbar = tqdm(range(start_epoch, nepochs))
 
     trainset, testset = load_data(data_dict)
-
+    trainset.tensors[0].to(DEVICE)
+    if data_dict["dataset_size"] == -1 or data_dict["dataset_size"] > len(trainset):
+        data_dict["dataset_size"] = len(trainset)
+    else:
+        trainset = random_split(
+            trainset,
+            [data_dict["dataset_size"], len(trainset) - data_dict["dataset_size"]],
+        )[0]
     test_abs = int(len(trainset) * 0.8)
     train_subset, val_subset = random_split(
         trainset, [test_abs, len(trainset) - test_abs]
@@ -244,13 +280,12 @@ def train_raytune(
         train_subset,
         batch_size=int(data_dict["batch_size"]),
         shuffle=True,
-        num_workers=8,
     )
     validation_loader = torch.utils.data.DataLoader(
-        val_subset, batch_size=int(data_dict["batch_size"]), shuffle=True, num_workers=8
+        val_subset, batch_size=int(data_dict["batch_size"]), shuffle=True
     )
 
-    for epoch in pbar:
+    for epoch in range(start_epoch, nepochs):
         model.train()
         run_epoch(
             training_loader,
@@ -258,9 +293,10 @@ def train_raytune(
             optimizer,
             alpha_bars,
             denoising_steps,
-            validate=False,
         )
 
+        if (epoch + 1) % 10 != 0:
+            continue
         model.eval()
         run_epoch(
             validation_loader,
@@ -278,18 +314,26 @@ def train_raytune(
             "net_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
         }
+        # print(
+        #     model.info["train_metrics"]["loss/train"][-1],
+        #     model.info["val_metrics"]["loss/val"][-1],
+        # )
         with tempfile.TemporaryDirectory() as checkpoint_dir:
-            data_path = Path(checkpoint_dir) / "data.pkl"
-            with open(data_path, "wb") as fp:
-                pickle.dump(checkpoint_data, fp)
-
             checkpoint = Checkpoint.from_directory(checkpoint_dir)
-            train.report(
-                {"loss": model.info["val_metrics"]["loss/val"][-1]},
-                checkpoint=checkpoint,
-            )
+            if train.get_context().get_world_rank() == 0:
+                data_path = Path(checkpoint_dir) / "data.pkl"
+                with open(data_path, "wb") as fp:
+                    pickle.dump(checkpoint_data, fp)
 
-    pbar.close()
+                train.report(
+                    {"loss": model.info["val_metrics"]["loss/val"][-1]},
+                    checkpoint=checkpoint,
+                )
+            else:
+                train.report(
+                    {"loss": model.info["val_metrics"]["loss/val"][-1]},
+                    checkpoint=None,
+                )
 
     model.info["epochs"] = epoch + 1
 
@@ -306,8 +350,8 @@ def train_normal(
 ):
     """Alg 1 from the DDPM paper"""
     model.to(DEVICE)
-    lr = 1e-3
-    model.info["lr"] = lr
+    lr = model.info["lr"]
+    # model.info["lr"] = lr
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     alpha_bars, _ = get_alpha_betas(denoising_steps)  # Precompute alphas
 
@@ -356,13 +400,16 @@ def train_normal(
             val_step = len(model.info["val_metrics"]["loss/val"]) - 1
             if idx_best == val_step:
                 model.save(epoch + 1, pbar)
-            elif val_step - idx_best >= 100:
-                logger.info("Cancelled training after 1000 epochs with no improvements")
-                break
+                pbar.set_description(f"Saved @ epoch {epoch+1}")
+                pbar.set_postfix({"loss": model.info["val_metrics"]["loss/val"][-1]})
+            # elif val_step - idx_best >= 100:
+            #     if input("No improvements after 1000 epochs, cancel?") == "y":
+            #         pbar.close()
+            #         break
 
     except KeyboardInterrupt:
         logger.info("Cancelled training (Keyboard Interrupt)")
-    pbar.close()
+        pbar.close()
 
     model.info["epochs"] = epoch + 1
 
@@ -392,9 +439,17 @@ def sample(
         ab_t = alpha_bars[t] * torch.ones((n_samples, 1), device=DEVICE)
         # Tile the alpha to the number of samples
         z = (
-            torch.randn((n_samples, trained_model.output_size), device=DEVICE)
+            torch.randn(
+                (n_samples, trained_model.output_size),
+                device=DEVICE,
+                dtype=torch.float64,
+            )
             if t > 1
-            else torch.zeros((n_samples, trained_model.output_size), device=DEVICE)
+            else torch.zeros(
+                (n_samples, trained_model.output_size),
+                device=DEVICE,
+                dtype=torch.float64,
+            )
         )
         # z = torch.clamp(z, min=-max, max=max)
         # z = (
@@ -423,7 +478,9 @@ def sample(
             # breakpoint()
             x_t += betas[t] ** 0.5 * z
         else:
-            model_prediction = trained_model(x_t, ts)
+            model_prediction = trained_model(
+                torch.concat([x_t, ts], dim=-1).to(torch.float64)
+            )
             x_t = (
                 1
                 / alphas[t] ** 0.5

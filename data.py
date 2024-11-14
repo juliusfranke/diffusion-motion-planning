@@ -40,7 +40,7 @@ SUPP_ENV = [
     "cost",
     "location",
 ]
-SUPP_CALC = ["R2SVD", "R4SVD"]
+SUPP_CALC = ["R2SVD", "R4SVD", "states"]
 SUPP_COMPLETE = SUPP_REG + SUPP_ENV + SUPP_CALC + ["rel_probability"]
 
 sinkhorn_loss = SamplesLoss("sinkhorn", p=2, blur=0.05)
@@ -158,7 +158,8 @@ class WeightSampler(stats.rv_continuous):
         # return 1 / (1 + (((1 - x) * 0.5) / (x * (1 - 0.5))) ** 2)
         # return 1-np.exp(-5*x**2)
         # return x**4
-        return x**10
+        # return x**10
+        return x
 
 
 def get_violations(samples):
@@ -217,6 +218,30 @@ def pruneDataset(
     return dataset, limit
 
 
+def calc_unicycle_states_batch(actions: np.ndarray, theta_0: np.ndarray, dt=0.1):
+    start = np.zeros((actions.shape[0], 3))
+    start[:, 2] = theta_0
+
+    states = start
+    theta = theta_0
+    x = np.zeros(actions.shape[0])
+    y = np.zeros(actions.shape[0])
+    for i in range(actions.shape[1] // 2):
+        s = actions[:, i]
+        phi = actions[:, i + 1]
+        dx = dt * s * np.cos(theta)
+        dy = dt * s * np.sin(theta)
+        dtheta = dt * phi
+        x += dx
+        y += dy
+        theta += dtheta
+        theta = (theta + np.pi) % (2 * np.pi) - np.pi
+        states = np.concatenate(
+            [states, x[:, np.newaxis], y[:, np.newaxis], theta[:, np.newaxis]], axis=1
+        )
+    return states
+
+
 def calc_unicycle_states(
     actions: np.ndarray, dt: float = 0.1, start: List[float] = [0, 0, 0]
 ):
@@ -256,11 +281,14 @@ def flatten_R2SVD(theta):
 
 
 def load_dataset(
-    path: Path, regular: Dict[str, int], conditioning: Dict[str, int]
+    path: Path, regular: Dict[str, int], conditioning: Dict[str, int], dataset_size: int
 ) -> np.ndarray:
     conditioning = deepcopy(conditioning)
     regular = deepcopy(regular)
-    complete = regular | conditioning
+    if isinstance(conditioning, Dict):
+        complete = regular | conditioning
+    else:
+        complete = regular
     assert set(complete.keys()) <= set(
         SUPP_COMPLETE
     ), f"{[key for key in complete.keys() if key not in SUPP_COMPLETE]} are/is not implemented"
@@ -269,19 +297,29 @@ def load_dataset(
     for calc in reg_calculate:
         regular.pop(calc)
 
-    cond_calculate = {
-        key: value for key, value in conditioning.items() if key in SUPP_CALC
-    }
-    for calc in cond_calculate:
-        conditioning.pop(calc)
-
-    calculate = reg_calculate | cond_calculate
-
     regular_header = get_header(regular)
-    conditioning_header = get_header(conditioning)
-    calc_header = get_header(calculate)
-    columns = regular_header + conditioning_header
-    if "R4SVD" in calculate.keys() or "R2SVD" in calculate.keys():
+
+    if conditioning != None:
+        cond_calculate = {
+            key: value for key, value in conditioning.items() if key in SUPP_CALC
+        }
+        for calc in cond_calculate:
+            conditioning.pop(calc)
+
+        calculate = reg_calculate | cond_calculate
+        calc_header = get_header(calculate)
+        conditioning_header = get_header(conditioning)
+        columns = regular_header + conditioning_header
+    else:
+        calculate = reg_calculate
+        calc_header = get_header(calculate)
+        columns = regular_header
+
+    if (
+        "R4SVD" in calculate.keys()
+        or "R2SVD" in calculate.keys()
+        or "states" in calculate.keys()
+    ):
         columns.append("theta_0")
 
     rel_p = "rel_probability" in columns
@@ -291,25 +329,42 @@ def load_dataset(
         )
         columns.append("count")
     dataset = pd.read_parquet(
-        path, columns=columns, filters=[("p_obstacles", ">", 0.75)]
+        path, columns=columns + ["cost"], filters=[("p_obstacles", ">", 0.75)]
     )
+    # dataset = pd.read_parquet(path, columns=columns + ["cost"])
+    # breakpoint()
     for calc in calculate.keys():
         cols = get_header({calc: calculate[calc]})
         if calc == "R4SVD":
             flat_matrices = flatten_R4SVD(dataset["theta_0"])
             flat_df = pd.DataFrame(flat_matrices, columns=cols)
             dataset = pd.concat([dataset, flat_df], axis=1)
-            dataset.drop(columns="theta_0")
+            dataset.drop(columns="theta_0", inplace=True)
+            columns = list(dataset.columns)
         elif calc == "R2SVD":
             flat_matrices = flatten_R2SVD(dataset["theta_0"])
             flat_df = pd.DataFrame(flat_matrices, columns=cols)
             dataset = pd.concat([dataset, flat_df], axis=1)
-            dataset.drop(columns="theta_0")
+            dataset.drop(columns="theta_0", inplace=True)
+            columns = list(dataset.columns)
+        elif calc == "states":
+            actions_columns = get_header({"actions": regular["actions"]})
+            states = calc_unicycle_states_batch(
+                dataset[actions_columns].to_numpy(),
+                theta_0=dataset["theta_0"].to_numpy(),
+            )
+            flat_df = pd.DataFrame(states, columns=cols)
+            dataset = pd.concat([dataset, flat_df], axis=1)
+            dataset.drop(columns="theta_0", inplace=True)
+            columns = list(dataset.columns)
+            regular_header.remove("theta_0")
 
     dataset = dataset.round(decimals=2)
 
     if rel_p:
-        dataset = dataset.groupby(columns, as_index=False).agg({"count": "sum"})
+        dataset = dataset.groupby(columns, as_index=False).agg(
+            {"count": "sum", "cost": "mean"}
+        )
         env_group = [env_key for env_key in SUPP_ENV if env_key in complete.keys()]
         if env_group:
             dataset["group_max"] = dataset.groupby(env_group)["count"].transform("max")
@@ -317,40 +372,23 @@ def load_dataset(
             dataset["group_max"] = dataset["count"].max()
         dataset["rel_probability"] = dataset["count"] / dataset["group_max"]
         dataset.drop(columns=["group_max", "count"], inplace=True)
+        # breakpoint()
     else:
-        dataset = dataset.drop_duplicates()
-
-    sorted_header = sorted_nicely(regular_header + calc_header) + sorted_nicely(
-        conditioning_header
-    )
-    ic(sorted_header)
+        dataset = dataset.groupby(columns, as_index=False).agg({"cost": "mean"})
+        # breakpoint()
+        # dataset = dataset.drop_duplicates()
+    dataset = dataset.nsmallest(dataset_size, "cost")
+    # breakpoint()
+    dataset.drop(columns="cost", inplace=True)
+    if conditioning != None:
+        sorted_header = sorted_nicely(regular_header + calc_header) + sorted_nicely(
+            conditioning_header
+        )
+    else:
+        sorted_header = sorted_nicely(regular_header + calc_header)
+    # ic(sorted_header)
     dataset = dataset.reindex(sorted_header, axis=1)
     # ic(dataset.shape)
-
-    return dataset
-
-
-def old_load_allocator_dataset(path: Path, regular: Dict, conditioning: Dict):
-    regular_header = get_header(regular)
-    conditioning_header = get_header(conditioning)
-    dataset = None
-    for model in regular.keys():
-        model_ds_path = (path / model).with_suffix(".parquet")
-        model_ds = pd.read_parquet(model_ds_path, columns=conditioning.keys())
-        model_ds = model_ds.value_counts().reset_index()
-        model_ds.rename(columns={"count": model}, inplace=True)
-        if isinstance(dataset, pd.DataFrame):
-            dataset = dataset.merge(model_ds, how="outer", on=list(conditioning.keys()))
-        else:
-            dataset = model_ds
-    dataset["total"] = dataset[list(regular.keys())].sum(axis=1)
-    for model in regular.keys():
-        dataset[model] = dataset[model] / dataset["total"]
-    dataset.drop(columns="total", inplace=True)
-
-    sorted_header = sorted_nicely(regular_header) + sorted_nicely(conditioning_header)
-    ic(sorted_header)
-    dataset = dataset.reindex(sorted_header, axis=1)
 
     return dataset
 
@@ -372,7 +410,7 @@ def load_allocator_dataset(path: Path, regular: Dict, conditioning: Dict):
 
     dataset = pd.concat(dataset)
     sorted_header = sorted_nicely(regular_header) + sorted_nicely(conditioning_header)
-    ic(sorted_header)
+    # ic(sorted_header)
     dataset = dataset.reindex(sorted_header, axis=1)
 
     return dataset
@@ -467,12 +505,20 @@ def passthrough(x, *args):
 
 
 def load_data(data_dict):
-    data = load_dataset(
-        data_dict["dataset"],
-        regular=data_dict["regular"],
-        conditioning=data_dict["conditioning"],
-    ).to_numpy()
-    trainset = TensorDataset(torch.tensor(data, device=data_dict["device"]))
+    if "cascade" in data_dict.keys():
+        data = load_allocator_dataset(
+            path=data_dict["dataset"],
+            regular=data_dict["regular"],
+            conditioning=data_dict["conditioning"],
+        ).to_numpy()
+    else:
+        data = load_dataset(
+            path=data_dict["dataset"],
+            regular=data_dict["regular"],
+            conditioning=data_dict["conditioning"],
+            dataset_size=data_dict["dataset_size"],
+        ).to_numpy()
+    trainset = TensorDataset(torch.tensor(data))
 
     return trainset, None
 

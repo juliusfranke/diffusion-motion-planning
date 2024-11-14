@@ -24,9 +24,9 @@ def main():
     # Training new model
     trainModelParser = subparsers.add_parser("train", help="train new model")
     trainModelParser.set_defaults(fn="trainRun")
-    trainModelParser.add_argument(
-        "dataset", type=str, help="training dataset file (.parquet)"
-    )
+    # trainModelParser.add_argument(
+    #     "dataset", type=str, help="training dataset file (.parquet)"
+    # )
     trainModelParser.add_argument(
         "config",
         type=isFile,

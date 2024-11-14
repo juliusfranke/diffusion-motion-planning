@@ -27,7 +27,7 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-torch.manual_seed(0)
+# torch.manual_seed(0)
 
 
 def plotTraining(trainingData) -> None:
@@ -138,7 +138,7 @@ def trainRun(args: Dict):
 def trainComposite(args: Dict, data_dict: Dict):
     assert set(data_dict["regular"].keys()) == set(data_dict["cascade"].keys())
 
-    dataset_folder = Path(args["dataset"])
+    dataset_folder = Path(data_dict["dataset"])
     model_path = (Path("data/models/") / args["name"]).with_suffix(".pt")
     if model_path.exists():
         if input(f"{model_path} already exists, overwrite? (y/n) ") != "y":
@@ -165,9 +165,10 @@ def trainSingle(args: Dict, data_dict: Dict):
         yaml.safe_dump(data_dict, file, default_flow_style=None)
 
     data = load_dataset(
-        args["dataset"],
+        data_dict["dataset"],
         regular=data_dict["regular"],
         conditioning=data_dict["conditioning"],
+        dataset_size=args["trainingsize"],
     ).to_numpy()
     trainModel(args, data_dict, data, model_path)
 
@@ -176,11 +177,13 @@ def trainModel(args: Dict, data_dict: Dict, data: np.ndarray, model_path: Path):
     name = args["name"]
     training_size = args["trainingsize"]
     val_split = args["valsplit"]
-
-    conditions = [
-        key for key in data_dict["conditioning"].keys() if key != "rel_probability"
-    ]
-    cond_str = " + ".join(conditions)
+    if data_dict["conditioning"] != None:
+        conditions = [
+            key for key in data_dict["conditioning"].keys() if key != "rel_probability"
+        ]
+        cond_str = " + ".join(conditions)
+    else:
+        cond_str = "None"
     logger.info(f"Dataset size: {data.shape[0]}")
 
     dataset = TensorDataset(torch.tensor(data, device=DEVICE))
@@ -204,16 +207,14 @@ def trainModel(args: Dict, data_dict: Dict, data: np.ndarray, model_path: Path):
     training_set, validation_set = torch.utils.data.random_split(
         dataset, [len_training, len_validation]
     )
-    batch_size_train = min(len_training // 10, 4096)
-    batch_size_val = min(len_validation // 10, 4096)
-    logger.debug(f"Batch size: {batch_size_train}")
+    batch_size = data_dict["batch_size"]
+    # batch_size_train = min(len_training // 10, 4096)
+    # batch_size_val = min(len_validation // 10, 4096)
+    logger.debug(f"Batch size: {batch_size}")
     # breakpoint()
-    training_loader = DataLoader(
-        training_set, batch_size=batch_size_train, shuffle=True
-    )
-    validation_loader = DataLoader(
-        validation_set, batch_size=batch_size_val, shuffle=True
-    )
+    # data_dict["batch_size"] = batch_size_train
+    training_loader = DataLoader(training_set, batch_size=batch_size, shuffle=True)
+    validation_loader = DataLoader(validation_set, batch_size=batch_size, shuffle=True)
     # test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=True)
 
     model = Net(data_dict)
@@ -244,11 +245,12 @@ def trainModel(args: Dict, data_dict: Dict, data: np.ndarray, model_path: Path):
     #     ).items()
     # }
     # print(hparams)
-
-    all_keys = list(data_dict["regular"].keys()) + list(
-        data_dict["conditioning"].keys()
-    )
-
+    if data_dict["conditioning"] != None:
+        all_keys = list(data_dict["regular"].keys()) + list(
+            data_dict["conditioning"].keys()
+        )
+    else:
+        all_keys = list(data_dict["regular"].keys())
     tb_writer.add_hparams(
         {
             "n_hidden": model.info["n_hidden"],
@@ -258,7 +260,7 @@ def trainModel(args: Dict, data_dict: Dict, data: np.ndarray, model_path: Path):
             "epochs": model.info["epochs"],
             "val_split": val_split,
             "dataset_size": training_size,
-            "batch_size": batch_size_train,
+            "batch_size": batch_size,
             "training_time": duration,
             "epoch/s": model.info["epochs"] / duration,
             "conditioning": cond_str,
@@ -279,9 +281,6 @@ def trainModel(args: Dict, data_dict: Dict, data: np.ndarray, model_path: Path):
     )
 
     tb_writer.close()
-    # model_path = Path("data/models/qtest.pt")
-
-    # logger.info(f"Model saved as {model_path}")
 
 
 def loadRun(args: Dict):
@@ -447,6 +446,8 @@ def sampleToPrimitive(samples, data_dict):
         y = sampleDict["R2SVD"][:, 1]
         sampleDict["theta_0"] = np.arctan2(y, x)
         sampleDict.pop("R2SVD")
+    elif "states" in sampleDict.keys():
+        sampleDict["theta_0"] = sampleDict["states"][:, 2]
     # ic(max(sampleDict["theta_0"]))
     # ic(min(sampleDict["theta_0"]))
     # breakpoint()
