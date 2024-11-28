@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import torch
 from geomloss import SamplesLoss
 import re
+import seaborn as sns
 
 S_MIN = -1
 S_MAX = 2
@@ -328,10 +329,12 @@ def load_dataset(
             "rel_probability",
         )
         columns.append("count")
-    dataset = pd.read_parquet(
-        path, columns=columns + ["cost"], filters=[("p_obstacles", ">", 0.75)]
-    )
-    # dataset = pd.read_parquet(path, columns=columns + ["cost"])
+    try:
+        dataset = pd.read_parquet(
+            path, columns=columns + ["cost"], filters=[("p_obstacles", ">", 0.75)]
+        )
+    except:
+        dataset = pd.read_parquet(path, columns=columns + ["cost"])
     # breakpoint()
     for calc in calculate.keys():
         cols = get_header({calc: calculate[calc]})
@@ -367,19 +370,47 @@ def load_dataset(
         )
         env_group = [env_key for env_key in SUPP_ENV if env_key in complete.keys()]
         if env_group:
-            dataset["group_max"] = dataset.groupby(env_group)["count"].transform("max")
+            dataset["group_max"] = dataset.groupby(env_group + ["cost"])[
+                "count"
+            ].transform("max")
         else:
             dataset["group_max"] = dataset["count"].max()
         dataset["rel_probability"] = dataset["count"] / dataset["group_max"]
         dataset.drop(columns=["group_max", "count"], inplace=True)
+        dataset["weight"] = (
+            (-dataset["cost"] + dataset["cost"].max())
+            / (dataset["cost"].max() - dataset["cost"].min())
+        ) ** 6 + dataset["rel_probability"]
         # breakpoint()
     else:
         dataset = dataset.groupby(columns, as_index=False).agg({"cost": "mean"})
+        dataset["weight"] = (
+            (-dataset["cost"] + dataset["cost"].max())
+            / (dataset["cost"].max() - dataset["cost"].min())
+        ) ** 6
         # breakpoint()
         # dataset = dataset.drop_duplicates()
-    dataset = dataset.nsmallest(dataset_size, "cost")
+    # -------------------------------
+    # data = dataset.sample(int(np.sqrt(dataset_size * len(dataset))), weights="weight")
+
+    # orig = dataset[["cost"]]
+    # orig.loc[:, "name"] = "original"
+    # sampled = data[["cost"]]
+    # sampled.loc[:, "name"] = "sampled"
+    # plot_data = pd.concat([orig, sampled])
+    # sns.kdeplot(plot_data, x="cost", hue="name", common_norm=False)
+    # plt.show()
+
+    # -------------------------------
+    # ic(dataset.max())
+    if dataset_size < len(dataset):
+        dataset = dataset.sample(
+            int(np.sqrt(dataset_size * len(dataset))), weights="weight"
+        )
+    # ic(dataset.max())
     # breakpoint()
-    dataset.drop(columns="cost", inplace=True)
+    # dataset = dataset.nsmallest(dataset_size, "cost")
+    dataset.drop(columns=["cost", "weight"], inplace=True)
     if conditioning != None:
         sorted_header = sorted_nicely(regular_header + calc_header) + sorted_nicely(
             conditioning_header
@@ -389,6 +420,7 @@ def load_dataset(
     # ic(sorted_header)
     dataset = dataset.reindex(sorted_header, axis=1)
     # ic(dataset.shape)
+    breakpoint()
 
     return dataset
 

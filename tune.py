@@ -33,7 +33,7 @@ else:
 
 
 def main(num_samples=10, max_num_epochs=10, gpus_per_trial=2):
-    torch.manual_seed(0)
+    # torch.manual_seed(0)
     path = Path().absolute()
     # config = {
     #     "n_hidden": tune.choice([1, 2]),
@@ -42,36 +42,36 @@ def main(num_samples=10, max_num_epochs=10, gpus_per_trial=2):
     #     "batch_size": tune.choice([128, 512]),
     # }
     config = {
-        # "lr": tune.loguniform(1e-4, 1e-2),
+        "lr": tune.loguniform(1e-4, 1e-2),
         # "batch_size": tune.randint([128, 256, 512]),
         "denoising_steps": tune.randint(20, 100),
-        "conditioning": {
-            "rel_probability": tune.choice([0, 1]),
-            "location": tune.choice([0, 1]),
-            "p_obstacles": tune.choice([0, 1]),
-            "env_width": tune.choice([0, 1]),
-            "env_height": tune.choice([0, 1]),
-            "area": tune.choice([0, 1]),
-            "area_blocked": tune.choice([0, 1]),
-            "env_theta_start": tune.choice([0, 1]),
-            "env_theta_goal": tune.choice([0, 1]),
-            # "avg_clustering": tune.choice([0, 1]),
-            # "avg_node_connectivity": tune.choice([0, 1]),
-        },
+        # "conditioning": {
+        #     "rel_probability": tune.choice([0, 1]),
+        #     "location": tune.choice([0, 1]),
+        #     "p_obstacles": tune.choice([0, 1]),
+        #     "env_width": tune.choice([0, 1]),
+        #     "env_height": tune.choice([0, 1]),
+        #     "area": tune.choice([0, 1]),
+        #     "area_blocked": tune.choice([0, 1]),
+        #     "env_theta_start": tune.choice([0, 1]),
+        #     "env_theta_goal": tune.choice([0, 1]),
+        # "avg_clustering": tune.choice([0, 1]),
+        # "avg_node_connectivity": tune.choice([0, 1]),
+        # },
         # "n_hidden": tune.quniform(2, 4, 1),
-        # "n_hidden": tune.randint(2, 4),
+        "n_hidden": tune.randint(2, 4),
         # "s_hidden": tune.randint(128, 600),
-        # "s_hidden": tune.choice([2**n for n in range(7, 10)]),
+        "s_hidden": tune.choice([2**n for n in range(7, 10)]),
     }
     model_static = {
         "type": "unicycle1_v0",
-        "lr": 1e-3,
+        # "lr": 1e-3,
         "batch_size": 512,
-        "denoising_steps": 30,
-        "n_hidden": 3,
-        "s_hidden": 128,
+        # "denoising_steps": 30,
+        # "n_hidden": 3,
+        # "s_hidden": 128,
         "regular": {"actions": 10, "R2SVD": 2},
-        # "conditioning": {"location": 1, "p_obstacles": 1},
+        "conditioning": {"location": 1, "p_obstacles": 1, "env_theta_goal": 1},
         "loss": "mse",
         "dataset": path / "data/training_datasets/rand_env_40k.parquet",
         "device": DEVICE,
@@ -122,6 +122,7 @@ def main(num_samples=10, max_num_epochs=10, gpus_per_trial=2):
     #     stop_last_trials=False,
     # )
     scheduler = ASHAScheduler(
+        time_attr="training_iteration",
         metric="loss",
         mode="min",
         max_t=max_num_epochs,
@@ -132,23 +133,23 @@ def main(num_samples=10, max_num_epochs=10, gpus_per_trial=2):
         partial(
             train_raytune,
             model_static=model_static,
-            nepochs=max_num_epochs,
+            nepochs=max_num_epochs + 1,
         ),
         {"cpu": 1, "gpu": gpus_per_trial},
     )
     # stopper = ExperimentPlateauStopper(metric="loss", mode="min", patience=10)
-    tuner = tune.Tuner(
-        trainable,
-        tune_config=tune.TuneConfig(
-            num_samples=num_samples,
-            scheduler=scheduler,
-            search_alg=search_alg,
-            # num_samples=num_samples,
-            # scheduler=scheduler,
-        ),
-        # run_config=train.RunConfig(stop=stopper),
-        param_space=config,
-    )
+    # tuner = tune.Tuner(
+    #     trainable,
+    #     tune_config=tune.TuneConfig(
+    #         num_samples=num_samples,
+    #         scheduler=scheduler,
+    #         search_alg=search_alg,
+    #         # num_samples=num_samples,
+    #         # scheduler=scheduler,
+    #     ),
+    #     # run_config=train.RunConfig(stop=stopper),
+    #     param_space=config,
+    # )
     # result = tune.run(
     #     partial(
     #         train_raytune,
@@ -161,11 +162,20 @@ def main(num_samples=10, max_num_epochs=10, gpus_per_trial=2):
     #     scheduler=scheduler,
     # )
 
-    result = tuner.fit()
+    result = tune.Tuner.restore(
+        "/home/julius/ray_results/train_raytune_2024-11-14_13-41-14",
+        trainable=trainable,
+    ).fit()
+    # result = tuner.fit()
     # breakpoint()
     best_trial = result.get_best_result(metric="loss", mode="min", scope="all")
+
     print(f"Best trial config: {best_trial.config}")
     print(f"Best Loss: {best_trial.metrics['loss']}")
+    breakpoint()
+    df = result.get_dataframe(metric="loss", mode="min")
+    df.to_parquet("ray_tune.parquet")
+    print(df)
     # df = best_trial.metrics_dataframe
     # print(f"Best trial final validation loss: {best_trial.metrics['loss']}")
     # print(f"Best trial final validation accuracy: {best_trial.last_result['accuracy']}")
@@ -193,4 +203,4 @@ def main(num_samples=10, max_num_epochs=10, gpus_per_trial=2):
 
 if __name__ == "__main__":
     # You can change the number of GPUs per trial here:
-    main(num_samples=64, max_num_epochs=2000, gpus_per_trial=0)
+    main(num_samples=128, max_num_epochs=2000, gpus_per_trial=0)
