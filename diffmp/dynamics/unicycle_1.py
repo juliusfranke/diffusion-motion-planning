@@ -6,7 +6,7 @@ import numpy as np
 class UnicycleFirstOrder(DynamicsBase):
     def __init__(
         self,
-        u_lims: None | Dict[str, List[float]] = {
+        u_lims: None | Dict[str, float | List[float]] = {
             "lower": -0.5,
             "upper": 0.5,
         },

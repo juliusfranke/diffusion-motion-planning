@@ -8,8 +8,8 @@ class DynamicsBase:
         dt: float,
         q: List[str],
         u: List[str],
-        q_lims: None | Dict[str, List[float]] = None,
-        u_lims: None | Dict[str, List[float]] = None,
+        q_lims: None | Dict[str, float | List[float]] = None,
+        u_lims: None | Dict[str, float | List[float]] = None,
     ):
         self.dt = dt
         self.q = q
@@ -34,7 +34,7 @@ class DynamicsBase:
         ).all(), f"u:{u} is not within bounds"
         return self._step(q, u)
 
-    def _step(self, q: np.ndarray, u: np.ndarray): ...
+    def _step(self, q: np.ndarray, u: np.ndarray) -> np.ndarray: ...
 
     def _lims_to_vec(self, lims, names):
         if not lims:
