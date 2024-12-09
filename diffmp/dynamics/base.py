@@ -1,5 +1,6 @@
 from typing import Dict, List
 import numpy as np
+from nptyping import NDArray
 
 
 class DynamicsBase:
@@ -8,8 +9,8 @@ class DynamicsBase:
         dt: float,
         q: List[str],
         u: List[str],
-        q_lims: None | Dict[str, float | List[float]] = None,
-        u_lims: None | Dict[str, float | List[float]] = None,
+        q_lims: None | Dict[str, Dict[str, float]] = None,
+        u_lims: None | Dict[str, Dict[str, float]] = None,
     ):
         self.dt = dt
         self.q = q
@@ -21,40 +22,52 @@ class DynamicsBase:
         self.u_lims = u_lims
         self._u_lims = self._lims_to_vec(u_lims, self.u)
 
-    def step(self, q: np.ndarray, u: np.ndarray):
+    def step(self, q: NDArray, u: NDArray):
         q = np.atleast_2d(q).astype(float)
         u = np.atleast_2d(u).astype(float)
         assert q.shape[1] == self.q_dim
         assert u.shape[1] == self.u_dim
-        assert (self._q_lims["lower"] <= q).all() and (
-            q <= self._q_lims["upper"]
-        ).all(), f"q:{q} is not within bounds"
-        assert (self._u_lims["lower"] <= u).all() and (
-            u <= self._u_lims["upper"]
+        assert (self._u_lims["min"] <= u).all() and (
+            (u <= self._u_lims["max"]).all()
         ).all(), f"u:{u} is not within bounds"
-        return self._step(q, u)
+        q_new = self._step(q, u)
+        if not (self._q_lims["min"] <= q_new).all():
+            breakpoint()
+        if not (self._q_lims["max"] >= q_new).all():
+            breakpoint()
+        assert (self._q_lims["min"] <= q_new).all() and (
+            (q_new <= self._q_lims["max"]).all()
+        ).all(), f"q:{q} is not within bounds"
+        return q_new
 
-    def _step(self, q: np.ndarray, u: np.ndarray) -> np.ndarray: ...
+    def _step(self, q: NDArray, u: NDArray) -> NDArray: ...
 
-    def _lims_to_vec(self, lims, names):
+    def _lims_to_vec(
+        self, lims: None | Dict[str, Dict[str, float]], names: List[str]
+    ) -> Dict[str, NDArray]:
+        print(lims, names)
         if not lims:
             return {
-                "lower": np.array([-np.inf] * len(names)),
-                "upper": np.array([np.inf] * len(names)),
+                "min": np.array([-np.inf] * len(names)),
+                "max": np.array([np.inf] * len(names)),
             }
         lower = np.array(
             [
-                lims["lower"][_u] if isinstance(lims["lower"], dict) else lims["lower"]
-                for _u in self.u
+                lims["min"][name]
+                if isinstance(lims["min"], dict) and name in lims["min"].keys()
+                else -np.inf
+                for name in names
             ]
         )
         upper = np.array(
             [
-                lims["upper"][_u] if isinstance(lims["upper"], dict) else lims["upper"]
-                for _u in self.u
+                lims["max"][name]
+                if isinstance(lims["max"], dict) and name in lims["max"].keys()
+                else np.inf
+                for name in names
             ]
         )
-        return {"lower": lower, "upper": upper}
+        return {"min": lower, "max": upper}
 
     def __str__(self):
         return f"{self.__class__.__name__}: u{self.u} -> q{self.q}"

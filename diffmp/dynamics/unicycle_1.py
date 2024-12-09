@@ -1,22 +1,30 @@
-from typing import Dict, List
 from .base import DynamicsBase
+from nptyping import NDArray
 import numpy as np
 
 
 class UnicycleFirstOrder(DynamicsBase):
     def __init__(
         self,
-        u_lims: None | Dict[str, float | List[float]] = {
-            "lower": -0.5,
-            "upper": 0.5,
-        },
-        dt: float = 0.1,
-    ):
+        max_vel: float,
+        min_vel: float,
+        min_angular_vel: float,
+        max_angular_vel: float,
+        dt: float,
+        **kwargs,
+    ) -> None:
         DynamicsBase.__init__(
-            self, q=["x", "y", "theta"], u=["s", "phi"], dt=dt, u_lims=u_lims
+            self,
+            q=["x", "y", "theta"],
+            u=["s", "phi"],
+            dt=dt,
+            u_lims={
+                "min": {"s": min_vel, "phi": min_angular_vel},
+                "max": {"s": max_vel, "phi": max_angular_vel},
+            },
         )
 
-    def _step(self, q: np.ndarray, u: np.ndarray) -> np.ndarray:
+    def _step(self, q: NDArray, u: NDArray) -> NDArray:
         next = q.copy()
         next[:, 0] += np.cos(q[:, 2]) * u[:, 0] * self.dt
         next[:, 1] += np.sin(q[:, 2]) * u[:, 0] * self.dt
