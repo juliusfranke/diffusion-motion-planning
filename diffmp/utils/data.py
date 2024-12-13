@@ -1,60 +1,51 @@
-from enum import Enum
-from typing import Tuple
+from pathlib import Path
+from typing import Dict, Tuple
 
+
+import yaml
+import diffmp
+from .config import DynamicFactor, ParameterData
 from torch.utils.data import TensorDataset
 
-from diffmp.torch.model import Config
+
+def load_yaml(path: Path) -> Dict:
+    if not path.exists():
+        raise FileNotFoundError()
+    if path.is_dir():
+        raise IsADirectoryError()
+    with open(path, "r") as file:
+        data = yaml.safe_load(file)
+    return data
 
 
-class ParameterRegular(Enum):
-    actions = 0
-    theta_0 = 1
-    delta_0 = 2
-
-
-class ParameterConditioning(Enum):
-    theta_start = 0
-    theta_goal = 1
-    area = 2
-    area_blocked = 3
-    area_free = 4
-    env_width = 5
-    env_height = 6
-    n_obstacles = 7
-    p_obstacles = 8
-    cost = 9
-    location = 10
-
-
-class ParameterCalculated(Enum):
-    states = 0
-    theta_0_R2 = 1
-
-
-def load_data(dataset: str, **kwargs) -> TensorDataset:
+def load_data(dataset: Path, **kwargs) -> TensorDataset:
     return TensorDataset()
 
 
-def input_output_size(config: Config) -> Tuple[int, int]:
+def param_size(param: ParameterData, config: diffmp.torch.Config):
+    size = param.static_size
+    match param.dynamic_factor:
+        case DynamicFactor.u:
+            size += config.timesteps * len(config.dynamics.u)
+        case DynamicFactor.q:
+            size += config.timesteps * len(config.dynamics.q)
+        case DynamicFactor._:
+            pass
+        case _:
+            raise NotImplementedError(f"{param.dynamic_factor} not implemented")
+
+    return size
+
+
+def input_output_size(config: diffmp.torch.Config) -> Tuple[int, int]:
     in_size = 0
     out_size = 0
     for regular in config.regular:
-        match regular:
-            case regular.actions:
-                out_size += config.timesteps * len(config.dynamics.u)
-            case _:
-                out_size += 1
-
-    for calculated in config.calculated:
-        match calculated:
-            case calculated.states:
-                out_size += config.timesteps * len(config.dynamics.q)
-            case calculated.theta_0_R2:
-                out_size += 2
+        out_size += param_size(regular.value, config)
 
     for conditioning in config.conditioning:
-        match conditioning:
-            case _:
-                out_size += 1
+        in_size += param_size(conditioning.value, config)
+
+    in_size += out_size + 1
 
     return (in_size, out_size)

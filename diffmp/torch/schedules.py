@@ -1,7 +1,7 @@
 from typing import Tuple
 
 import numpy as np
-from nptyping import NDArray
+from numpy.typing import NDArray
 
 
 def cosine_noise_schedule(N: int) -> Tuple[NDArray, NDArray]:

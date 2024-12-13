@@ -1,21 +1,17 @@
 from enum import Enum
-from typing import Dict, Type
 
+import diffmp
 from .base import DynamicsBase
 from .unicycle1 import UnicycleFirstOrder
 from .unicycle2 import UnicycleSecondOrder
 
 
-class DynamicTypes(Enum):
-    unicycle1 = 0
-    unicycle2 = 1
+class Dynamics(Enum):
+    unicycle1 = UnicycleFirstOrder
+    unicycle2 = UnicycleSecondOrder
 
 
-dynamics: Dict[DynamicTypes, Type[DynamicsBase]] = {
-    DynamicTypes.unicycle1: UnicycleFirstOrder,
-    DynamicTypes.unicycle2: UnicycleSecondOrder,
-}
-
-
-def get_dynamics(config: Dict) -> DynamicsBase:
-    return dynamics[DynamicTypes[config["dynamics"]]](**config)
+def get_dynamics(name: str) -> DynamicsBase:
+    path = (diffmp.utils.DYN_CONFIG_PATH / name).with_suffix(".yaml")
+    config = diffmp.utils.load_yaml(path)
+    return Dynamics[config["dynamics"]].value(**config)

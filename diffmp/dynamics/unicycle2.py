@@ -1,6 +1,7 @@
-from .base import DynamicsBase
-from nptyping import NDArray
 import numpy as np
+from numpy.typing import NDArray
+
+from diffmp.dynamics.base import DynamicsBase
 
 
 class UnicycleSecondOrder(DynamicsBase):

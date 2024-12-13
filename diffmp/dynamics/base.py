@@ -1,6 +1,7 @@
 from typing import Dict, List
+
 import numpy as np
-from nptyping import NDArray
+from numpy.typing import NDArray
 
 
 class DynamicsBase:
@@ -42,10 +43,10 @@ class DynamicsBase:
 
     def _step(self, q: NDArray, u: NDArray) -> NDArray: ...
 
+    @staticmethod
     def _lims_to_vec(
-        self, lims: None | Dict[str, Dict[str, float]], names: List[str]
+        lims: None | Dict[str, Dict[str, float]], names: List[str]
     ) -> Dict[str, NDArray]:
-        print(lims, names)
         if not lims:
             return {
                 "min": np.array([-np.inf] * len(names)),
