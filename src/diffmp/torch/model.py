@@ -9,6 +9,7 @@ from torch.nn import Linear, Module, ModuleList, ReLU
 from torch.nn.init import kaiming_uniform_
 
 import diffmp
+from .schedules import NoiseSchedule
 # from diffmp.dynamics import get_dynamics, DynamicsBase
 # from diffmp.torch import Loss
 # from diffmp.utils import (
@@ -32,15 +33,16 @@ class Config(NamedTuple):
     denoising_steps: int
     batch_size: int
     lr: float
+    noise_schedule: NoiseSchedule
     optimizer = torch.optim.Adam
-    validation_split:float = 0.8
+    validation_split: float = 0.8
     conditioning: List[diffmp.utils.ParameterConditioning] = []
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
         data = diffmp.utils.load_yaml(path)
 
-        data["dynamics"] = diffmp.dynamics.get_dynamics(data["dynamics"])
+        data["dynam:cs"] = diffmp.dynamics.get_dynamics(data["dynamics"])
         data["regular"] = [
             diffmp.utils.ParameterRegular[reg] for reg in data["regular"]
         ]
@@ -67,6 +69,7 @@ def main():
         denoising_steps=1,
         batch_size=1,
         lr=0.1,
+        noise_schedule=NoiseSchedule.linear_scaled,
     )
     a = config.loss_fn.value(Tensor(), Tensor())
 
@@ -85,7 +88,9 @@ class Model(Module):
         self.s_hidden = config.s_hidden
         self.n_hidden = config.n_hidden
 
-        self.loss_fn = config.loss_fn
+        self.loss_fn = config.loss_fn.value
+        self.noise_schedule = config.noise_schedule.value
+        self.optimizer = config.optimizer(self.parameters(), lr=self.config.lr)
 
         self.path: Path | None = None
 

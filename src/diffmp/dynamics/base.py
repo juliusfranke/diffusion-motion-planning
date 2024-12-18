@@ -1,10 +1,11 @@
+from abc import ABC, abstractmethod
 from typing import Dict, List
 
 import numpy as np
-from numpy.typing import NDArray
+import numpy.typing as npt
 
 
-class DynamicsBase:
+class DynamicsBase(ABC):
     def __init__(
         self,
         dt: float,
@@ -12,7 +13,7 @@ class DynamicsBase:
         u: List[str],
         q_lims: None | Dict[str, Dict[str, float]] = None,
         u_lims: None | Dict[str, Dict[str, float]] = None,
-    ):
+    ) -> None:
         self.dt = dt
         self.q = q
         self.q_dim: int = len(q)
@@ -23,7 +24,16 @@ class DynamicsBase:
         self.u_lims = u_lims
         self._u_lims = self._lims_to_vec(u_lims, self.u)
 
-    def step(self, q: NDArray, u: NDArray):
+    def step(self, q: npt.NDArray, u: npt.NDArray) -> npt.NDArray:
+        """Applies the action u to the starting state u.
+
+        Args:
+            q: Starting state.
+            u: Action to perform.
+
+        Returns:
+            The next state when performing the input action on the input state.
+        """
         q = np.atleast_2d(q).astype(float)
         u = np.atleast_2d(u).astype(float)
         assert q.shape[1] == self.q_dim
@@ -31,22 +41,31 @@ class DynamicsBase:
         assert (self._u_lims["min"] <= u).all() and (
             (u <= self._u_lims["max"]).all()
         ).all(), f"u:{u} is not within bounds"
+
         q_new = self._step(q, u)
-        if not (self._q_lims["min"] <= q_new).all():
-            breakpoint()
-        if not (self._q_lims["max"] >= q_new).all():
-            breakpoint()
+
         assert (self._q_lims["min"] <= q_new).all() and (
             (q_new <= self._q_lims["max"]).all()
         ).all(), f"q:{q} is not within bounds"
         return q_new
 
-    def _step(self, q: NDArray, u: NDArray) -> NDArray: ...
+    @abstractmethod
+    def _step(self, q: npt.NDArray, u: npt.NDArray) -> npt.NDArray:
+        """Abstractmethod to be implemented.
+
+        Args:
+            q: Starting state.
+            u: Action to perform.
+
+        Returns:
+            The next state when performing the input action on the input state.
+        """
+        pass
 
     @staticmethod
     def _lims_to_vec(
         lims: None | Dict[str, Dict[str, float]], names: List[str]
-    ) -> Dict[str, NDArray]:
+    ) -> Dict[str, npt.NDArray]:
         if not lims:
             return {
                 "min": np.array([-np.inf] * len(names)),

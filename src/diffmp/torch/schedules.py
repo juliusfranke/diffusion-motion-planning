@@ -1,4 +1,5 @@
-from typing import Tuple
+from enum import Enum
+from typing import Callable, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -43,3 +44,18 @@ def linear_noise_schedule_scaled(N: int) -> Tuple[NDArray, NDArray]:
 
     alpha_bars = np.cumprod(1 - betas)
     return alpha_bars, betas
+
+
+class NoiseScheduleFunction:
+    def __init__(self, func: Callable[[int], Tuple[NDArray, NDArray]]):
+        self.func = func
+
+    def __call__(self, N: int) -> Tuple[NDArray, NDArray]:
+        return self.func(N)
+
+
+class NoiseSchedule(Enum):
+    linear = NoiseScheduleFunction(linear_noise_schedule)
+    linear_scaled = NoiseScheduleFunction(linear_noise_schedule_scaled)
+    cosine = NoiseScheduleFunction(cosine_noise_schedule)
+    sigmoid = NoiseScheduleFunction(sigmoid_noise_schedule)
