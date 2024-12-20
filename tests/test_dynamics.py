@@ -2,26 +2,34 @@
 import diffmp
 import pytest
 import numpy as np
-import yaml
+import numpy.typing as npt
 
 
-@pytest.mark.parametrize("dynamics", [("unicycle1_v0"), ("unicycle1_v1")])
+@pytest.mark.parametrize(
+    "dynamics", [("unicycle1_v0"), ("unicycle1_v1"), ("unicycle2_v0")]
+)
 def test_implementations(dynamics: str):
-    assert isinstance(diffmp.dynamics.get_dynamics(dynamics), diffmp.dynamics.DynamicsBase)
+    assert isinstance(
+        diffmp.dynamics.get_dynamics(dynamics), diffmp.dynamics.DynamicsBase
+    )
 
-    # with open("unicycle1_v0.yaml", "r") as file:
-    #     data = yaml.safe_load(file)
 
-    # with open("unicycle2_v0.yaml", "r") as file:
-    #     data_2 = yaml.safe_load(file)
-
-    # a = get_dynamics(data)
-    # b = get_dynamics(data_2)
-    # u= np.array([0.3,0.5])
-    # q = np.array([0,0,0])
-    # q2 = np.array([0,0,0,0,0])
-    # u2 = np.array([0.1,0.1])
-    # for i in range(55):
-    #     # q = a.step(q=q, u=u)
-    #     q2 = b.step(q=q2, u=u2)
-    #     print(q2)
+@pytest.mark.parametrize(
+    "dynamics, action, expected",
+    [
+        ("unicycle1_v0", np.array([[-0.5, 0.0]]), np.array([[-0.05, 0.0, 0.0]])),
+        ("unicycle1_v1", np.array([[0.5, 0.0]]), np.array([[0.05, 0.0, 0.0]])),
+        (
+            "unicycle2_v0",
+            np.array([[0.25, 0.0]]),
+            np.array([[0.0, 0.0, 0.0, 0.025, 0.0]]),
+        ),
+    ],
+)
+def test_step(
+    dynamics: str, action: npt.NDArray[np.floating], expected: npt.NDArray[np.floating]
+):
+    dyn = diffmp.dynamics.get_dynamics(dynamics)
+    q0 = np.zeros(len(dyn.q))
+    q1 = dyn.step(q0, action)
+    assert np.allclose(q1, np.atleast_2d(expected))
