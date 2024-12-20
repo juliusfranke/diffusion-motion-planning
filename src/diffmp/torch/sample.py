@@ -7,9 +7,12 @@ from .model import Model
 
 
 def sample(model: Model, n_samples: int, instance: diffmp.problems.Instance):
-    conditioning = diffmp.utils.condition_for_sampling(
-        model.config, n_samples, instance
-    )
+    if model.config.conditioning:
+        conditioning = diffmp.utils.condition_for_sampling(
+            model.config, n_samples, instance
+        )
+    else:
+        conditioning = None
 
     x_t = torch.randn((n_samples, model.out_size), device=diffmp.utils.DEVICE)
 

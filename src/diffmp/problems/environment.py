@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Tuple, List, Dict
-# from . import Obstacle, obstacle_from_dict
+from typing import Any, Dict, List, Tuple
+
 from .obstacle import Obstacle, obstacle_from_dict
 
 
@@ -25,9 +26,18 @@ class Environment:
         self.area_free = self.area - self.area_blocked
 
     @classmethod
-    def from_dict(cls, data: Dict) -> Environment:
+    def from_dict(
+        cls, data: Dict[str, Tuple[float, float] | List[int | Dict[str, Any]]]
+    ) -> Environment:
+        assert isinstance(data["min"], tuple)
+        assert isinstance(data["max"], tuple)
+        assert isinstance(data["obstacles"], list)
         min = data["min"]
         max = data["max"]
-        obstacles = [obstacle_from_dict(obstacle) for obstacle in data["obstacles"]]
+        obstacles = [
+            obstacle_from_dict(obstacle)
+            for obstacle in data["obstacles"]
+            if isinstance(obstacle, dict)
+        ]
 
         return cls(obstacles=obstacles, min=min, max=max)

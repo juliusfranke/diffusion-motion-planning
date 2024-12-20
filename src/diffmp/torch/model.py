@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import Any, List, NamedTuple
 
 from torch import Tensor, float64, save
 import torch
@@ -34,7 +34,7 @@ class Config(NamedTuple):
     batch_size: int
     lr: float
     noise_schedule: NoiseSchedule
-    optimizer = torch.optim.Adam
+    optimizer: Any = torch.optim.Adam
     validation_split: float = 0.8
     conditioning: List[diffmp.utils.ParameterConditioning] = []
 
@@ -54,24 +54,6 @@ class Config(NamedTuple):
                 for cond in data["conditioning"]
             ]
         return cls(**data)
-
-
-def main():
-    config = Config(
-        dynamics=diffmp.dynamics.get_dynamics("unicycle1_v0"),
-        timesteps=1,
-        problem="a",
-        n_hidden=1,
-        s_hidden=1,
-        regular=[diffmp.utils.ParameterRegular.actions],
-        loss_fn=diffmp.torch.Loss.mae,
-        dataset=Path(""),
-        denoising_steps=1,
-        batch_size=1,
-        lr=0.1,
-        noise_schedule=NoiseSchedule.linear_scaled,
-    )
-    a = config.loss_fn.value(Tensor(), Tensor())
 
 
 class Model(Module):
@@ -115,4 +97,5 @@ class Model(Module):
         for i in range(len(self.linears) - 1):
             layer = self.linears[i]
             x = ReLU()(layer(x))
-        return self.linears[-1](x)
+        out = self.linears[-1](x)
+        return torch.Tensor(out)

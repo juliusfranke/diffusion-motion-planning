@@ -1,6 +1,7 @@
+from typing import Any
 import numpy as np
+import numpy.typing as npt
 import torch
-from numpy.typing import NDArray
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
@@ -10,7 +11,10 @@ from .model import Model
 
 
 def run_epoch(
-    model: Model, training_loader: DataLoader, alpha_bars: NDArray, validate: bool
+    model: Model,
+    training_loader: DataLoader[Any],
+    alpha_bars: npt.NDArray[np.floating],
+    validate: bool,
 ):
     running_loss = 0.0
 
@@ -68,5 +72,3 @@ def train(model: Model, n_epochs: int):
     except KeyboardInterrupt:
         pbar.close()
         print("Stopped training")
-
-

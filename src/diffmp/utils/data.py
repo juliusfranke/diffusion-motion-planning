@@ -1,11 +1,10 @@
 from pathlib import Path
-from typing import Dict, Tuple, List
+from typing import Any, Dict, Tuple, List
 import pandas as pd
 
 
 import yaml
 import diffmp
-from diffmp.problems import environment
 from .config import (
     DynamicFactor,
     ParameterConditioning,
@@ -18,13 +17,14 @@ import torch
 from torch.utils.data import TensorDataset
 
 
-def load_yaml(path: Path) -> Dict:
+def load_yaml(path: Path) -> Dict[Any, Any]:
     if not path.exists():
         raise FileNotFoundError()
     if path.is_dir():
         raise IsADirectoryError()
     with open(path, "r") as file:
         data = yaml.safe_load(file)
+    assert isinstance(data, dict)
     return data
 
 
@@ -104,7 +104,7 @@ def input_output_size(config: diffmp.torch.Config) -> Tuple[int, int]:
 def condition_for_sampling(
     config: diffmp.torch.Config, n_samples: int, instance: diffmp.problems.Instance
 ) -> torch.Tensor:
-    data: Dict[Tuple, torch.Tensor] = {}
+    data: Dict[Tuple[str, str], torch.Tensor] = {}
     for condition in ParameterConditioning:
         if condition not in config.conditioning:
             continue

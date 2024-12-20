@@ -24,7 +24,9 @@ class DynamicsBase(ABC):
         self.u_lims = u_lims
         self._u_lims = self._lims_to_vec(u_lims, self.u)
 
-    def step(self, q: npt.NDArray, u: npt.NDArray) -> npt.NDArray:
+    def step(
+        self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
         """Applies the action u to the starting state u.
 
         Args:
@@ -50,7 +52,9 @@ class DynamicsBase(ABC):
         return q_new
 
     @abstractmethod
-    def _step(self, q: npt.NDArray, u: npt.NDArray) -> npt.NDArray:
+    def _step(
+        self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
         """Abstractmethod to be implemented.
 
         Args:
@@ -65,7 +69,7 @@ class DynamicsBase(ABC):
     @staticmethod
     def _lims_to_vec(
         lims: None | Dict[str, Dict[str, float]], names: List[str]
-    ) -> Dict[str, npt.NDArray]:
+    ) -> Dict[str, npt.NDArray[np.floating]]:
         if not lims:
             return {
                 "min": np.array([-np.inf] * len(names)),

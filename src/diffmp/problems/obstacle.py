@@ -1,4 +1,4 @@
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 import math
@@ -6,11 +6,10 @@ from typing import Tuple, Dict
 
 
 @dataclass
-class Obstacle:
+class Obstacle(ABC):
     center: Tuple[float, float]
 
-    # @property
-    # @abstractmethod
+    @abstractmethod
     def area(self) -> float: ...
 
 
@@ -18,7 +17,6 @@ class Obstacle:
 class BoxObstacle(Obstacle):
     size: Tuple[float, float]
 
-    # @property
     def area(self) -> float:
         return self.size[0] * self.size[1]
 
@@ -27,7 +25,6 @@ class BoxObstacle(Obstacle):
 class CylinderObstacle(Obstacle):
     radius: float
 
-    # @property
     def area(self) -> float:
         return math.pi * self.radius**2
 
@@ -37,12 +34,18 @@ class ObstacleType(Enum):
     cylinder = CylinderObstacle
 
 
-def obstacle_from_dict(data: Dict) -> Obstacle:
+def obstacle_from_dict(
+    data: Dict[str, float | int | str | Tuple[int, int]],
+) -> Obstacle:
+    assert isinstance(data["type"], str)
+    assert isinstance(data["center"], tuple)
     obstacle_type = ObstacleType[data["type"]]
     match obstacle_type:
         case ObstacleType.box:
-            return obstacle_type.value(data["center"], data["size"])
+            assert isinstance(data["size"], tuple)
+            return ObstacleType.box.value(data["center"], data["size"])
         case ObstacleType.cylinder:
-            return obstacle_type.value(data["center"], data["radius"])
+            assert isinstance(data["radius"], float | int)
+            return ObstacleType.cylinder.value(data["center"], data["radius"])
         case _:
             raise TypeError(f"Obstacle type {obstacle_type} does not exist")

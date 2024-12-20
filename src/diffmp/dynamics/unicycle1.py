@@ -1,5 +1,5 @@
 import numpy as np
-from numpy.typing import NDArray
+import numpy.typing as npt
 
 from diffmp.dynamics.base import DynamicsBase
 
@@ -25,7 +25,9 @@ class UnicycleFirstOrder(DynamicsBase):
             },
         )
 
-    def _step(self, q: NDArray, u: NDArray) -> NDArray:
+    def _step(
+        self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
         next = q.copy()
         next[:, 0] += np.cos(q[:, 2]) * u[:, 0] * self.dt
         next[:, 1] += np.sin(q[:, 2]) * u[:, 0] * self.dt

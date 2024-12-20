@@ -14,4 +14,14 @@ class Dynamics(Enum):
 def get_dynamics(name: str) -> DynamicsBase:
     path = (diffmp.utils.DYN_CONFIG_PATH / name).with_suffix(".yaml")
     config = diffmp.utils.load_yaml(path)
-    return Dynamics[config["dynamics"]].value(**config)
+    dyn: DynamicsBase = Dynamics[config["dynamics"]].value(**config)
+    return dyn
+
+
+__all__ = [
+    "DynamicsBase",
+    "UnicycleFirstOrder",
+    "UnicycleSecondOrder",
+    "Dynamics",
+    "get_dynamics",
+]

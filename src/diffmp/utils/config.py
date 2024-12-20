@@ -25,7 +25,9 @@ class DynamicFactor(Enum):
     q = 1
     u = 2
 
+
 # Not really happy with this, maybe change this later
+
 
 @dataclass(frozen=True)
 class ParameterData:

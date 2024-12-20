@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from .environment import Environment
 from .robots import Robot
@@ -13,7 +13,7 @@ class Instance:
     robots: List[Robot]
 
     @classmethod
-    def from_dict(cls, data: Dict) -> Instance:
+    def from_dict(cls, data: Dict[Any, Any]) -> Instance:
         env = Environment.from_dict(data["environment"])
         robots = [Robot.from_dict(robot_data) for robot_data in data["robots"]]
         return cls(env, robots)
