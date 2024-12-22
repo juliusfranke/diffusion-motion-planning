@@ -1,8 +1,8 @@
-# from diffmp.dynamics import get_dynamics
-import diffmp
-import pytest
 import numpy as np
 import numpy.typing as npt
+import pytest
+
+import diffmp
 
 
 @pytest.mark.parametrize(
