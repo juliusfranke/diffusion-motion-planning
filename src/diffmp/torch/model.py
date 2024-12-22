@@ -72,7 +72,6 @@ class Model(Module):
 
         self.loss_fn = config.loss_fn.value
         self.noise_schedule = config.noise_schedule.value
-        self.optimizer = config.optimizer(self.parameters(), lr=self.config.lr)
 
         self.path: Path | None = None
 
@@ -86,6 +85,8 @@ class Model(Module):
 
         for layer in self.linears:
             kaiming_uniform_(layer.weight)
+
+        self.optimizer = config.optimizer(self.parameters(), lr=self.config.lr)
 
     def save(self):
         if isinstance(self.path, Path):
