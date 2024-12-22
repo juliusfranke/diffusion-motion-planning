@@ -6,6 +6,7 @@ from torch import Tensor
 from .loss import mae, mse, sinkhorn
 from .model import Config, Model
 from .schedules import NoiseSchedule
+from .train import train
 
 
 class LossFunction:
