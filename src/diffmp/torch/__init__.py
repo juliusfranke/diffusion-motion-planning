@@ -7,6 +7,7 @@ from .loss import mae, mse, sinkhorn
 from .model import Config, Model
 from .schedules import NoiseSchedule
 from .train import train
+from .dataset import DiffusionDataset
 
 
 class LossFunction:
@@ -23,4 +24,12 @@ class Loss(Enum):
     sinkhorn = LossFunction(sinkhorn)
 
 
-__all__ = ["Config", "Model", "NoiseSchedule", "LossFunction", "Loss"]
+__all__ = [
+    "Config",
+    "Model",
+    "NoiseSchedule",
+    "LossFunction",
+    "Loss",
+    "DiffusionDataset",
+    "train",
+]

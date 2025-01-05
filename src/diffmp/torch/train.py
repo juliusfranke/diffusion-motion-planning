@@ -1,4 +1,5 @@
 from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 import torch
@@ -15,24 +16,35 @@ def run_epoch(
     training_loader: DataLoader[Any],
     alpha_bars: npt.NDArray[np.floating],
     validate: bool,
-):
+) -> float:
     running_loss = 0.0
-
-    for i, [data, conditioning] in enumerate(training_loader):
+    i = 0
+    for i, data in enumerate(training_loader):
+        regular = data["regular"]
+        conditioning = data["conditioning"]
         if not validate:
             model.optimizer.zero_grad()
-        t = torch.randint(model.config.denoising_steps, size=data.shape[0])
+        t = torch.randint(
+            model.config.denoising_steps,
+            size=(regular.shape[0],),
+            device=diffmp.utils.DEVICE,
+        )
         alpha_t = (
-            torch.index_select(torch.Tensor(alpha_bars), 0, t)
+            torch.index_select(
+                torch.tensor(alpha_bars, device=diffmp.utils.DEVICE), 0, t
+            )
             .unsqueeze(1)
             .to(diffmp.utils.DEVICE)
         )
 
-        epsilon = torch.randn(*data.shape, device=diffmp.utils.DEVICE)
+        epsilon = torch.randn(*regular.shape, device=diffmp.utils.DEVICE)
 
-        data_noised = alpha_t**0.5 * data + epsilon * (1 - alpha_t) ** 0.5
+        data_noised = alpha_t**0.5 * regular + epsilon * (1 - alpha_t) ** 0.5
 
-        x = torch.concat([data_noised, conditioning, t], dim=-1)
+        if conditioning.shape == regular.shape:
+            x = torch.concat([data_noised, conditioning, t], dim=-1)
+        else:
+            x = torch.concat([data_noised, t.unsqueeze(1)], dim=-1)
 
         out = model(x)
 
@@ -44,14 +56,15 @@ def run_epoch(
             loss.backward()
             model.optimizer.step()
 
-    # TODO implement reporting
+    return running_loss / (i + 1)
 
 
 def train(model: Model, n_epochs: int):
-    dataset = diffmp.utils.load_dataset(model.config)
-    dataset.tensors[0].to(diffmp.utils.DEVICE)
+    model.to(diffmp.utils.DEVICE)
 
-    test_abs = len(dataset) * model.config.validation_split
+    dataset = diffmp.utils.load_dataset(model.config)
+
+    test_abs = int(len(dataset) * model.config.validation_split)
     train_subset, val_subset = random_split(
         dataset, [test_abs, len(dataset) - test_abs]
     )
@@ -67,8 +80,10 @@ def train(model: Model, n_epochs: int):
     pbar = tqdm(range(n_epochs))
     try:
         for epoch in pbar:
-            run_epoch(model, training_loader, alpha_bars, validate=False)
-            run_epoch(model, validation_loader, alpha_bars, validate=True)
+            # TODO implement reporting
+            train_loss = run_epoch(model, training_loader, alpha_bars, validate=False)
+            val_loss = run_epoch(model, validation_loader, alpha_bars, validate=True)
+            pbar.write(f"{train_loss=} - {val_loss=}")
     except KeyboardInterrupt:
         pbar.close()
         print("Stopped training")

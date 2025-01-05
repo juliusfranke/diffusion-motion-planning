@@ -3,22 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, NamedTuple
 
-from torch import Tensor, float64, save
 import torch
+from torch import Tensor, float64, save
 from torch.nn import Linear, Module, ModuleList, ReLU
 from torch.nn.init import kaiming_uniform_
 
 import diffmp
+
 from .schedules import NoiseSchedule
-# from diffmp.dynamics import get_dynamics, DynamicsBase
-# from diffmp.torch import Loss
-# from diffmp.utils import (
-#     ParameterCalculated,
-#     ParameterConditioning,
-#     ParameterRegular,
-#     input_output_size,
-#     load_yaml,
-# )
 
 
 class Config(NamedTuple):
@@ -28,21 +20,22 @@ class Config(NamedTuple):
     n_hidden: int
     s_hidden: int
     regular: List[diffmp.utils.ParameterRegular]
+    conditioning: List[diffmp.utils.ParameterConditioning]
     loss_fn: diffmp.torch.Loss
     dataset: Path
     denoising_steps: int
     batch_size: int
     lr: float
     noise_schedule: NoiseSchedule
+    dataset_size: int
     optimizer: Any = torch.optim.Adam
     validation_split: float = 0.8
-    conditioning: List[diffmp.utils.ParameterConditioning] = []
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
         data = diffmp.utils.load_yaml(path)
 
-        data["dynam:cs"] = diffmp.dynamics.get_dynamics(data["dynamics"])
+        data["dynamics"] = diffmp.dynamics.get_dynamics(data["dynamics"])
         data["regular"] = [
             diffmp.utils.ParameterRegular[reg] for reg in data["regular"]
         ]
@@ -53,6 +46,8 @@ class Config(NamedTuple):
                 diffmp.utils.ParameterConditioning[cond]
                 for cond in data["conditioning"]
             ]
+        else:
+            data["conditioning"] = []
         return cls(**data)
 
 
