@@ -1,20 +1,21 @@
 from pathlib import Path
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, List, Tuple
+
 import pandas as pd
-
-
+import pyarrow.parquet as pq
+import torch
 import yaml
+
 import diffmp
+
 from .config import (
+    Availability,
     DynamicFactor,
+    Parameter,
     ParameterConditioning,
     ParameterData,
-    Availability,
-    Parameter,
     ParameterRegular,
 )
-import torch
-from torch.utils.data import TensorDataset
 
 
 def load_yaml(path: Path) -> Dict[Any, Any]:
@@ -28,26 +29,47 @@ def load_yaml(path: Path) -> Dict[Any, Any]:
     return data
 
 
-def load_dataset(config: diffmp.torch.Config, **kwargs) -> TensorDataset:
-    load: List[ParameterRegular | ParameterConditioning] = []
-    calc: List[ParameterRegular | ParameterConditioning] = []
+def load_dataset(
+    config: diffmp.torch.Config, **kwargs
+) -> diffmp.torch.DiffusionDataset:
+    def param_to_col(
+        params: List[ParameterRegular | ParameterConditioning],
+    ) -> List[str]:
+        cols: List[str] = []
+        for param in params:
+            cols.extend([str(col) for col in available_columns if param.name in col])
+        return cols
 
-    for param in config.regular + config.conditioning:
+    load_regular: List[ParameterRegular | ParameterConditioning] = []
+    load_conditioning: List[ParameterRegular | ParameterConditioning] = []
+    calc_regular: List[ParameterRegular | ParameterConditioning] = []
+    calc_conditioning: List[ParameterRegular | ParameterConditioning] = []
+
+    metadata = pq.read_table(config.dataset)
+    available_columns: List[Tuple[str, str]] = metadata.column_names
+
+    for param in config.regular:
         match param.value.value.availability:
             case Availability.dataset:
-                load.append(param)
+                load_regular.append(param)
             case Availability.calculated:
-                calc.append(param)
-            case _:
-                raise NotImplementedError(
-                    f"{param.value.value.availability} not implemented for load_dataset"
-                )
+                calc_regular.append(param)
 
-    load_columns = [param.name for param in load]
+    for param in config.conditioning:
+        match param.value.value.availability:
+            case Availability.dataset:
+                load_conditioning.append(param)
+            case Availability.calculated:
+                calc_conditioning.append(param)
+
+    load_columns = param_to_col(load_regular + load_conditioning)
+
     dataset = pd.read_parquet(config.dataset, columns=load_columns)
-    dataset = calc_param(config, calc, dataset)
+    dataset = calc_param(config, calc_regular, dataset)
+    dataset = dataset.sample(config.dataset_size)
+    dataset = torch.tensor(dataset.to_numpy(), device=diffmp.utils.DEVICE)
 
-    return TensorDataset()
+    return diffmp.torch.DiffusionDataset(regular=dataset, conditioning=None)
 
 
 def calc_param(
