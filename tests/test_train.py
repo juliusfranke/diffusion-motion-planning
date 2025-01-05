@@ -10,14 +10,16 @@ def test_train():
         timesteps=5,
         problem="bugtrap",
         n_hidden=2,
-        s_hidden=2,
+        s_hidden=128,
         regular=[diffmp.utils.ParameterRegular.actions],
+        conditioning=[],
         loss_fn=diffmp.torch.Loss.mse,
-        dataset=Path("data/training_datasets/bugtrap_single_l5.yaml"),
+        dataset=Path("data/training_datasets/alcove.parquet"),
         denoising_steps=30,
         batch_size=100,
         lr=1e-3,
+        dataset_size=1000,
         noise_schedule=diffmp.torch.NoiseSchedule.linear,
     )
     model = diffmp.torch.Model(config)
-    diffmp.torch.train(model, 100)
+    diffmp.torch.train(model, 10)
