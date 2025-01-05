@@ -1,6 +1,6 @@
-DiffMP==0.1
+# DiffMP==0.1
 geomloss==0.2.6
-numpy==2.2.0
+numpy<2
 pandas==2.2.3
 PyYAML==6.0.2
 tqdm==4.67.1
