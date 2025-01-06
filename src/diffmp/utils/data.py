@@ -29,19 +29,22 @@ def load_yaml(path: Path) -> Dict[Any, Any]:
     return data
 
 
+def param_to_col(
+    params: List[ParameterRegular | ParameterConditioning],
+    available_columns: List[Tuple[str, str]],
+) -> List[str]:
+    cols: List[str] = []
+    for param in params:
+        cols.extend([str(col) for col in available_columns if param.name in col])
+    return cols
+
+
 def load_dataset(
     config: diffmp.torch.Config, **kwargs
 ) -> diffmp.torch.DiffusionDataset:
-    def param_to_col(
-        params: List[ParameterRegular | ParameterConditioning],
-    ) -> List[str]:
-        cols: List[str] = []
-        for param in params:
-            cols.extend([str(col) for col in available_columns if param.name in col])
-        return cols
-
     load_regular: List[ParameterRegular | ParameterConditioning] = []
     load_conditioning: List[ParameterRegular | ParameterConditioning] = []
+
     calc_regular: List[ParameterRegular | ParameterConditioning] = []
     calc_conditioning: List[ParameterRegular | ParameterConditioning] = []
 
@@ -62,7 +65,7 @@ def load_dataset(
             case Availability.calculated:
                 calc_conditioning.append(param)
 
-    load_columns = param_to_col(load_regular + load_conditioning)
+    load_columns = param_to_col(load_regular + load_conditioning, available_columns)
 
     dataset = pd.read_parquet(config.dataset, columns=load_columns)
     dataset = calc_param(config, calc_regular, dataset)
@@ -133,50 +136,59 @@ def condition_for_sampling(
         match condition.value:
             case Parameter.theta_start:
                 data[("q_start", "theta_0")] = (
-                    torch.ones(n_samples) * instance.robots[0].start[2]
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
+                    * instance.robots[0].start[2]
                 )
             case Parameter.theta_goal:
                 data[("q_goal", "theta_0")] = (
-                    torch.ones(n_samples) * instance.robots[0].goal[2]
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
+                    * instance.robots[0].goal[2]
                 )
             case Parameter.area_blocked:
                 data[("environment", "area_blocked")] = (
-                    torch.ones(n_samples) * instance.environment.area_blocked
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
+                    * instance.environment.area_blocked
                 )
             case Parameter.area_free:
                 data[("environment", "area_free")] = (
-                    torch.ones(n_samples) * instance.environment.area_free
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
+                    * instance.environment.area_free
                 )
             case Parameter.area:
                 data[("environment", "area")] = (
-                    torch.ones(n_samples) * instance.environment.area
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
+                    * instance.environment.area
                 )
             case Parameter.env_width:
                 data[("environment", "env_width")] = (
-                    torch.ones(n_samples) * instance.environment.env_width
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
+                    * instance.environment.env_width
                 )
             case Parameter.env_height:
                 data[("environment", "env_height")] = (
-                    torch.ones(n_samples) * instance.environment.env_height
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
+                    * instance.environment.env_height
                 )
             case Parameter.n_obstacles:
-                data[("environment", "n_obstacles")] = torch.ones(n_samples) * len(
-                    instance.environment.obstacles
-                )
+                data[("environment", "n_obstacles")] = torch.ones(
+                    n_samples, device=diffmp.utils.DEVICE
+                ) * len(instance.environment.obstacles)
             case Parameter.p_obstacles:
                 data[("environment", "p_obstacles")] = (
-                    torch.ones(n_samples)
+                    torch.ones(n_samples, device=diffmp.utils.DEVICE)
                     * instance.environment.area_blocked
                     / instance.environment.area
                 )
             case Parameter.rel_l:
-                data[("misc", "rel_l")] = torch.linspace(0, 1, n_samples)
+                data[("misc", "rel_l")] = torch.linspace(
+                    0, 1, n_samples, device=diffmp.utils.DEVICE
+                )
             case Parameter.rel_p:
-                data[("misc", "rel_p")] = torch.linspace(0, 1, n_samples)
+                data[("misc", "rel_p")] = torch.linspace(
+                    0, 1, n_samples, device=diffmp.utils.DEVICE
+                )
             case Parameter.cost:
                 raise NotImplementedError
-            case _:
-                raise NotImplementedError(f"{condition} is not implemented")
 
     df = pd.DataFrame(data)
 

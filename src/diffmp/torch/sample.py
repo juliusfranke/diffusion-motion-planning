@@ -14,7 +14,9 @@ def sample(model: Model, n_samples: int, instance: diffmp.problems.Instance):
     else:
         conditioning = None
 
-    x_t = torch.randn((n_samples, model.out_size), device=diffmp.utils.DEVICE)
+    x_t = torch.randn(
+        (n_samples, model.out_size), device=diffmp.utils.DEVICE, dtype=torch.float64
+    )
 
     alpha_bars, betas = model.noise_schedule(model.config.denoising_steps)
     alphas = np.clip(1 - betas, 1e-8, np.inf)
@@ -23,8 +25,12 @@ def sample(model: Model, n_samples: int, instance: diffmp.problems.Instance):
         conditioning = torch.atleast_2d(conditioning)
 
     for t in range(len(alphas))[::-1]:
-        ts = t * torch.ones((n_samples, 1), device=diffmp.utils.DEVICE)
-        ab_t = alpha_bars[t] * torch.ones((n_samples, 1), device=diffmp.utils.DEVICE)
+        ts = t * torch.ones(
+            (n_samples, 1), device=diffmp.utils.DEVICE, dtype=torch.float64
+        )
+        ab_t = alpha_bars[t] * torch.ones(
+            (n_samples, 1), device=diffmp.utils.DEVICE, dtype=torch.float64
+        )
 
         z = (
             torch.randn(

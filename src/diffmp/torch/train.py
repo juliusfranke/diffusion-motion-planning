@@ -4,7 +4,6 @@ import numpy as np
 import numpy.typing as npt
 import torch
 from torch.utils.data import DataLoader, random_split
-from tqdm import tqdm
 
 import diffmp
 
@@ -77,13 +76,19 @@ def train(model: Model, n_epochs: int):
     )
 
     alpha_bars, _ = model.noise_schedule(model.config.denoising_steps)
-    pbar = tqdm(range(n_epochs))
+    for reporter in model.config.reporters:
+        if hasattr(reporter, "start"):
+            reporter.start(n_epochs)
     try:
-        for epoch in pbar:
+        for epoch in range(n_epochs):
             # TODO implement reporting
             train_loss = run_epoch(model, training_loader, alpha_bars, validate=False)
             val_loss = run_epoch(model, validation_loader, alpha_bars, validate=True)
-            pbar.write(f"{train_loss=} - {val_loss=}")
+            for reporter in model.config.reporters:
+                reporter.report_loss(train_loss, val_loss, epoch)
     except KeyboardInterrupt:
-        pbar.close()
         print("Stopped training")
+    finally:
+        for reporter in model.config.reporters:
+            if hasattr(reporter, "close"):
+                reporter.close()

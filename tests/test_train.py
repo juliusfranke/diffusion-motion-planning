@@ -19,6 +19,7 @@ def test_train():
         batch_size=100,
         lr=1e-3,
         dataset_size=1000,
+        reporters=[diffmp.utils.TQDMReporter()],
         noise_schedule=diffmp.torch.NoiseSchedule.linear,
     )
     model = diffmp.torch.Model(config)

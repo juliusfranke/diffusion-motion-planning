@@ -3,11 +3,12 @@ from typing import Callable
 
 from torch import Tensor
 
+from .dataset import DiffusionDataset
 from .loss import mae, mse, sinkhorn
 from .model import Config, Model
+from .sample import sample
 from .schedules import NoiseSchedule
 from .train import train
-from .dataset import DiffusionDataset
 
 
 class LossFunction:
@@ -32,4 +33,5 @@ __all__ = [
     "Loss",
     "DiffusionDataset",
     "train",
+    "sample",
 ]

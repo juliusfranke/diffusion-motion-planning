@@ -28,6 +28,7 @@ class Config(NamedTuple):
     lr: float
     noise_schedule: NoiseSchedule
     dataset_size: int
+    reporters: List[diffmp.utils.Reporter]
     optimizer: Any = torch.optim.Adam
     validation_split: float = 0.8
 
