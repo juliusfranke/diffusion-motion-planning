@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 
 from .obstacle import Obstacle, obstacle_from_dict
 
@@ -27,13 +27,15 @@ class Environment:
 
     @classmethod
     def from_dict(
-        cls, data: Dict[str, Tuple[float, float] | List[int | Dict[str, Any]]]
+        cls, data: Dict[str, List[float] | List[int | Dict[str, Any]]]
     ) -> Environment:
-        assert isinstance(data["min"], tuple)
-        assert isinstance(data["max"], tuple)
+        assert isinstance(data["min"], list) and len(data["min"]) == 2
+        assert isinstance(data["max"], list) and len(data["max"]) == 2
+        min = cast(Tuple[float, float], data["min"])
+        max = cast(Tuple[float, float], data["max"])
+
         assert isinstance(data["obstacles"], list)
-        min = data["min"]
-        max = data["max"]
+
         obstacles = [
             obstacle_from_dict(obstacle)
             for obstacle in data["obstacles"]
