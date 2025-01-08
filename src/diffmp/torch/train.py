@@ -44,7 +44,6 @@ def run_epoch(
             x = torch.concat([data_noised, conditioning, t], dim=-1)
         else:
             x = torch.concat([data_noised, t.unsqueeze(1)], dim=-1)
-
         out = model(x)
 
         loss = model.loss_fn(out, epsilon)

@@ -11,10 +11,11 @@ class Dynamics(Enum):
     unicycle2 = UnicycleSecondOrder
 
 
-def get_dynamics(name: str) -> DynamicsBase:
+def get_dynamics(name: str, timesteps: int) -> DynamicsBase:
     path = (diffmp.utils.DYN_CONFIG_PATH / name).with_suffix(".yaml")
     config = diffmp.utils.load_yaml(path)
-    dyn: DynamicsBase = Dynamics[config["dynamics"]].value(**config)
+    config["timesteps"] = timesteps
+    dyn = Dynamics[config["dynamics"]].value(**config)
     return dyn
 
 

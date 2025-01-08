@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
@@ -69,3 +70,9 @@ class TensorBoardReporter(Reporter):
 
     def close(self):
         self.writer.close()
+
+
+class Reporters(Enum):
+    console = ConsoleReporter
+    tqdm = TQDMReporter
+    tensorboard = TensorBoardReporter

@@ -1,3 +1,4 @@
+from typing import Optional
 import torch.utils.data
 import diffmp
 import torch
@@ -5,7 +6,11 @@ import torch
 
 class DiffusionDataset(torch.utils.data.Dataset):
     def __init__(
-        self, regular: torch.Tensor, conditioning: torch.Tensor | None, *args, **kwargs
+        self,
+        regular: torch.Tensor,
+        conditioning: Optional[torch.Tensor],
+        *args,
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
 

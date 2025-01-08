@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import diffmp
 from typing import Dict, List
 
 import numpy as np
@@ -11,6 +12,7 @@ class DynamicsBase(ABC):
         dt: float,
         q: List[str],
         u: List[str],
+        parameter_set: diffmp.utils.ParameterSet,
         q_lims: None | Dict[str, Dict[str, float]] = None,
         u_lims: None | Dict[str, Dict[str, float]] = None,
     ) -> None:
@@ -23,6 +25,7 @@ class DynamicsBase(ABC):
         self._q_lims = self._lims_to_vec(q_lims, self.q)
         self.u_lims = u_lims
         self._u_lims = self._lims_to_vec(u_lims, self.u)
+        self.parameter_set = parameter_set
 
     def step(
         self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]

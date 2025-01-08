@@ -17,6 +17,6 @@ class Robot:
         assert isinstance(data["type"], str)
         start = data["start"]
         goal = data["goal"]
-        _type = diffmp.dynamics.get_dynamics(data["type"])
+        _type = diffmp.dynamics.get_dynamics(data["type"], 5)
 
         return cls(start=start, goal=goal, _type=_type)

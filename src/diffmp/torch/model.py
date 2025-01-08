@@ -19,8 +19,8 @@ class Config(NamedTuple):
     problem: str
     n_hidden: int
     s_hidden: int
-    regular: List[diffmp.utils.ParameterRegular]
-    conditioning: List[diffmp.utils.ParameterConditioning]
+    regular: List[diffmp.utils.DatasetParameter | diffmp.utils.CalculatedParameter]
+    conditioning: List[diffmp.utils.DatasetParameter | diffmp.utils.CalculatedParameter]
     loss_fn: diffmp.torch.Loss
     dataset: Path
     denoising_steps: int
@@ -36,19 +36,23 @@ class Config(NamedTuple):
     def from_yaml(cls, path: Path) -> Config:
         data = diffmp.utils.load_yaml(path)
 
-        data["dynamics"] = diffmp.dynamics.get_dynamics(data["dynamics"])
+        data["dynamics"] = diffmp.dynamics.get_dynamics(data["dynamics"], 5)
         data["regular"] = [
-            diffmp.utils.ParameterRegular[reg] for reg in data["regular"]
+            data["dynamics"].parameter_set[reg] for reg in data["regular"]
         ]
-        data["loss_fn"] = diffmp.torch.Loss[data["loss_fn"]]
-        data["dataset"] = Path(data["dataset"])
         if "conditioning" in data.keys():
-            data["conditioning"] = [
-                diffmp.utils.ParameterConditioning[cond]
-                for cond in data["conditioning"]
+            data["regular"] = [
+                data["dynamics"].parameter_set[reg] for reg in data["conditioning"]
             ]
         else:
             data["conditioning"] = []
+
+        data["reporters"] = [
+            diffmp.utils.Reporters[rep].value() for rep in data["reporters"]
+        ]
+        data["noise_schedule"] = diffmp.torch.NoiseSchedule[data["noise_schedule"]]
+        data["loss_fn"] = diffmp.torch.Loss[data["loss_fn"]]
+        data["dataset"] = Path(data["dataset"])
         return cls(**data)
 
 
@@ -60,8 +64,9 @@ class Model(Module):
         self.regular = config.regular
         self.conditioning = config.conditioning
 
-        self.in_size, self.out_size = diffmp.utils.input_output_size(config)
-        self.cond_size = self.in_size - self.out_size
+        self.out_size = sum([param.size for param in self.regular])
+        self.cond_size = sum([param.size for param in self.conditioning])
+        self.in_size = self.out_size + self.cond_size + 1
 
         self.s_hidden = config.s_hidden
         self.n_hidden = config.n_hidden
