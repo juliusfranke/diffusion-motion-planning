@@ -24,28 +24,41 @@ class UnicycleFirstOrder(DynamicsBase):
 
         parameter_set.add_parameters(
             [
-                DatasetParameter(name="actions", size=2 * timesteps, col_1="actions"),
                 DatasetParameter(
-                    name="theta_0", size=3 * timesteps, col_1="states", col_2="theta_0"
+                    "actions",
+                    2 * timesteps,
+                    0,
+                    [("actions", f"s_{i}") for i in range(timesteps)]
+                    + [("actions", f"phi_{i}") for i in range(timesteps)],
                 ),
-                DatasetParameter(name="theta_s", size=1, col_1="env", col_2="theta_s"),
-                DatasetParameter(name="theta_q", size=1, col_1="env", col_2="theta_g"),
+                DatasetParameter(
+                    "theta_0",
+                    3 * timesteps,
+                    0,
+                    [("states", "theta_0")],
+                ),
+                DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
+                DatasetParameter("theta_q", 1, 0, [("env", "theta_g")]),
             ],
             condition=False,
         )
         parameter_set.add_parameters(
             [
                 CalculatedParameter(
-                    name="states",
-                    size=3 * timesteps,
-                    requires=["actions", "theta_0"],
-                    to=self.step,
+                    "states",
+                    3 * timesteps,
+                    0,
+                    [(f"s_{i}", f"phi_{i}") for i in range(timesteps)],
+                    ["actions", "theta_0"],
+                    lambda x: x,
                 ),
                 CalculatedParameter(
-                    name="Theta_0",
-                    size=2,
-                    requires=["theta_0"],
-                    to=self.step,
+                    "Theta_0",
+                    2,
+                    0,
+                    [("Theta_0_x", "Theta_0_y")],
+                    ["theta_0"],
+                    lambda x: x,
                 ),
             ],
             condition=True,

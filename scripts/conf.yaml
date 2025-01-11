@@ -4,7 +4,11 @@
 "n_hidden": 2
 "s_hidden": 128
 "regular": 
-  - "actions"
+  - name: "actions"
+"conditioning":
+  - name: "rel_p"
+    weight: 1.0
+  - name: "delta_0"
 "loss_fn": "mse"
 "dataset": "data/training_datasets/alcove.parquet"
 "denoising_steps": 30

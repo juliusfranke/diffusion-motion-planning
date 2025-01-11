@@ -18,7 +18,7 @@ class DiffusionDataset(torch.utils.data.Dataset):
 
         self.regular: torch.Tensor = regular.to(diffmp.utils.DEVICE)
         self.conditioning: torch.Tensor | None = (
-            conditioning.to(diffmp.utils.DEVICE) if conditioning else None
+            conditioning.to(diffmp.utils.DEVICE) if conditioning is not None else None
         )
 
     def __getitem__(self, idx):

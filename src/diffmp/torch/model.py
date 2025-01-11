@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, NamedTuple
+from typing import Any, Dict, List, NamedTuple
 
 import torch
 from torch import Tensor, float64, save
@@ -35,17 +35,44 @@ class Config(NamedTuple):
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
         data = diffmp.utils.load_yaml(path)
+        return cls.from_dict(data)
 
+    @classmethod
+    def from_dict(cls, data: Dict) -> Config:
+        required = []
         data["dynamics"] = diffmp.dynamics.get_dynamics(data["dynamics"], 5)
-        data["regular"] = [
-            data["dynamics"].parameter_set[reg] for reg in data["regular"]
-        ]
+        reg_params = []
+        for param_str in data["regular"]:
+            param = data["dynamics"].parameter_set[param_str]
+            reg_params.append(param)
+            if not isinstance(param, diffmp.utils.CalculatedParameter):
+                continue
+            for req in param.requires:
+                required.append(data["dynamics"].parameter_set[req])
+
+        data["regular"] = reg_params
+
         if "conditioning" in data.keys():
-            data["regular"] = [
-                data["dynamics"].parameter_set[reg] for reg in data["conditioning"]
-            ]
+            cond_params = []
+            for param_str in data["conditioning"]:
+                param = data["dynamics"].parameter_set[param_str]
+                cond_params.append(param)
+                if not isinstance(param, diffmp.utils.CalculatedParameter):
+                    continue
+                for req in param.requires:
+                    required.append(data["dynamics"].parameter_set[req])
+
+            data["conditioning"] = cond_params
         else:
             data["conditioning"] = []
+
+        new_param_set = diffmp.utils.ParameterSet()
+        new_param_set.add_parameters(data["regular"], condition=False)
+        new_param_set.add_parameters(data["conditioning"], condition=True)
+        new_param_set.required = [
+            req for req in required if req not in data["regular"] + data["conditioning"]
+        ]
+        data["dynamics"].parameter_set = new_param_set
 
         data["reporters"] = [
             diffmp.utils.Reporters[rep].value() for rep in data["reporters"]

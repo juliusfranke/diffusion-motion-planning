@@ -7,6 +7,7 @@ from .model import Model
 
 
 def sample(model: Model, n_samples: int, instance: diffmp.problems.Instance):
+    model.to(diffmp.utils.DEVICE)
     if model.config.conditioning:
         conditioning = diffmp.utils.condition_for_sampling(
             model.config, n_samples, instance

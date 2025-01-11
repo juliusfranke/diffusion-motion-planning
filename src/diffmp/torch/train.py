@@ -40,10 +40,11 @@ def run_epoch(
 
         data_noised = alpha_t**0.5 * regular + epsilon * (1 - alpha_t) ** 0.5
 
-        if conditioning.shape == regular.shape:
-            x = torch.concat([data_noised, conditioning, t], dim=-1)
+        if conditioning.shape[1] != 0:
+            x = torch.concat([data_noised, conditioning, t.unsqueeze(1)], dim=-1)
         else:
             x = torch.concat([data_noised, t.unsqueeze(1)], dim=-1)
+
         out = model(x)
 
         loss = model.loss_fn(out, epsilon)
