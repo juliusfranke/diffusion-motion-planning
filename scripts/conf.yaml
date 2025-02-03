@@ -4,17 +4,19 @@
 "n_hidden": 2
 "s_hidden": 128
 "regular": 
-  - name: "actions"
+  - "actions"
+  - "theta_0"
 "conditioning":
-  - name: "rel_p"
-    weight: 1.0
-  - name: "delta_0"
+  - "rel_p"
+  # - name: "rel_p"
+  #   weight: 1.0
+  # - name: "delta_0"
 "loss_fn": "mse"
-"dataset": "data/training_datasets/alcove.parquet"
+"dataset": "data/training_datasets/5.parquet"
 "denoising_steps": 30
 "batch_size": 100
 "lr": 1.0e-3
 "dataset_size": 1000
 "reporters":
   - "tqdm"
-"noise_schedule": "linear"
+"noise_schedule": "linear_scaled"

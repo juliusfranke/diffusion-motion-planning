@@ -21,24 +21,22 @@ class UnicycleFirstOrder(DynamicsBase):
         **kwargs,
     ) -> None:
         parameter_set = get_default_parameter_set()
+        actions_set = []
+        for i in range(timesteps):
+            actions_set.append(("actions", f"s_{i}"))
+            actions_set.append(("actions", f"phi_{i}"))
 
         parameter_set.add_parameters(
             [
-                DatasetParameter(
-                    "actions",
-                    2 * timesteps,
-                    0,
-                    [("actions", f"s_{i}") for i in range(timesteps)]
-                    + [("actions", f"phi_{i}") for i in range(timesteps)],
-                ),
+                DatasetParameter("actions", 2 * timesteps, 0, actions_set),
                 DatasetParameter(
                     "theta_0",
-                    3 * timesteps,
+                    1,
                     0,
                     [("states", "theta_0")],
                 ),
                 DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
-                DatasetParameter("theta_q", 1, 0, [("env", "theta_g")]),
+                DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
             ],
             condition=False,
         )

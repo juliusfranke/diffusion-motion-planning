@@ -25,6 +25,9 @@ class Environment:
         self.area_blocked: float = sum([o.area() for o in self.obstacles])
         self.area_free = self.area - self.area_blocked
 
+        self.n_obstacles = len(self.obstacles)
+        self.p_obstacles = self.area_blocked / self.area
+
     @classmethod
     def from_dict(
         cls, data: Dict[str, List[float] | List[int | Dict[str, Any]]]

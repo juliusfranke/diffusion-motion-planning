@@ -30,7 +30,7 @@ class DynamicsBase(ABC):
     def step(
         self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]
     ) -> npt.NDArray[np.floating]:
-        """Applies the action u to the starting state u.
+        """Applies the action u to the starting state q.
 
         Args:
             q: Starting state.

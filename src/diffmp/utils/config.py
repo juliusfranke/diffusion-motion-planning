@@ -183,7 +183,7 @@ def get_default_parameter_set() -> ParameterSet:
                 "rel_p", 1, 1, [("misc", "rel_p")], ["count"], calc_rel_p
             ),
         ],
-        condition=False,
+        condition=True,
     )
 
     return param_set
