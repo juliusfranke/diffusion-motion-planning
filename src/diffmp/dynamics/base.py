@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import pandas as pd
 import diffmp
 from typing import Dict, List
 
@@ -13,6 +14,7 @@ class DynamicsBase(ABC):
         q: List[str],
         u: List[str],
         parameter_set: diffmp.utils.ParameterSet,
+        timesteps: int,
         q_lims: None | Dict[str, Dict[str, float]] = None,
         u_lims: None | Dict[str, Dict[str, float]] = None,
     ) -> None:
@@ -26,15 +28,20 @@ class DynamicsBase(ABC):
         self.u_lims = u_lims
         self._u_lims = self._lims_to_vec(u_lims, self.u)
         self.parameter_set = parameter_set
+        self.timesteps = timesteps
 
     def step(
-        self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]
+        self,
+        q: npt.NDArray[np.floating],
+        u: npt.NDArray[np.floating],
+        clip: bool = False,
     ) -> npt.NDArray[np.floating]:
         """Applies the action u to the starting state q.
 
         Args:
             q: Starting state.
             u: Action to perform.
+            clip: Clips u and q to bounds
 
         Returns:
             The next state when performing the input action on the input state.
@@ -43,15 +50,25 @@ class DynamicsBase(ABC):
         u = np.atleast_2d(u).astype(float)
         assert q.shape[1] == self.q_dim
         assert u.shape[1] == self.u_dim
+        if clip:
+            for i in range(self.u_dim):
+                u[:, i] = np.clip(
+                    u[:, i], self._u_lims["min"][i], self._u_lims["max"][i]
+                )
         assert (self._u_lims["min"] <= u).all() and (
             (u <= self._u_lims["max"]).all()
-        ).all(), f"u:{u} is not within bounds"
+        ).all(), "u is not within bounds"
 
         q_new = self._step(q, u)
 
+        if clip:
+            for i in range(self.q_dim):
+                q[:, i] = np.clip(
+                    q[:, i], self._q_lims["min"][i], self._q_lims["max"][i]
+                )
         assert (self._q_lims["min"] <= q_new).all() and (
             (q_new <= self._q_lims["max"]).all()
-        ).all(), f"q:{q} is not within bounds"
+        ).all(), "q is not within bounds"
         return q_new
 
     @abstractmethod
@@ -67,6 +84,10 @@ class DynamicsBase(ABC):
         Returns:
             The next state when performing the input action on the input state.
         """
+        pass
+
+    @abstractmethod
+    def to_mp(self, data: npt.NDArray) -> Dict:
         pass
 
     @staticmethod

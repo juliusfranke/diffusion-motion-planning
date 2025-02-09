@@ -54,14 +54,19 @@ def load_dataset(
         ast.literal_eval(col) for col in metadata.column_names
     ]
 
-    load_columns = param_to_col(parameter_set, available_columns)
+    load_columns = param_to_col(parameter_set, available_columns) + [str(("misc", "rel_c"))]
 
     dataset = pd.read_parquet(config.dataset, columns=load_columns)
     dataset = calc_param(parameter_set, dataset)
+
     [dataset.drop(columns=p.cols, inplace=True) for p in parameter_set.required]
     # TODO Weights
-    dataset = dataset.sample(config.dataset_size)
+    # weights = dataset[("misc", "weights")] = dataset.misc.rel_c**10
+    # dataset = dataset.sample(config.dataset_size, weights= weights)
+    # dataset = dataset.sort_values(("misc", "weight"), ascending=False)
+    dataset = dataset.nlargest(config.dataset_size,("misc", "rel_c"))
     reg_cols, cond_cols = parameter_set.get_columns()
+    print(reg_cols,"\n", cond_cols)
     regular = dataset[reg_cols]
     conditioning = dataset[cond_cols]
     regular = torch.tensor(regular.to_numpy(), device=diffmp.utils.DEVICE)
@@ -77,37 +82,6 @@ def calc_param(
     for param in parameter_set.iter_calc():
         dataset = param.to(dataset)
     return dataset
-
-
-# def param_size(param: ParameterData, config: diffmp.torch.Config):
-#     size = param.static_size
-#     match param.dynamic_factor:
-#         case DynamicFactor.u:
-#             size += config.timesteps * len(config.dynamics.u)
-#         case DynamicFactor.q:
-#             size += config.timesteps * len(config.dynamics.q)
-#         case DynamicFactor.none:
-#             pass
-#         case _:
-#             raise NotImplementedError(
-#                 f"{param.dynamic_factor} not implemented for param_size"
-#             )
-
-#     return size
-
-
-# def input_output_size(config: diffmp.torch.Config) -> Tuple[int, int]:
-#     in_size = 0
-#     out_size = 0
-# for regular in config.regular:
-#     out_size += param_size(regular.value.value, config)
-
-# for conditioning in config.conditioning:
-#     in_size += param_size(conditioning.value.value, config)
-
-# in_size += out_size + 1
-
-# return (in_size, out_size)
 
 
 def condition_for_sampling(

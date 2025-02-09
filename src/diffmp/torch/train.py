@@ -49,7 +49,7 @@ def run_epoch(
 
         loss = model.loss_fn(out, epsilon)
 
-        running_loss += loss.detach().cpu().numpy()
+        running_loss += float(loss.detach().cpu().numpy())
 
         if not validate:
             loss.backward()

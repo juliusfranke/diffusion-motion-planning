@@ -1,22 +1,24 @@
-"dynamics": "unicycle1_v0"
+"dynamics": "unicycle2_v0"
 "timesteps": 5
 "problem": "bugtrap"
-"n_hidden": 2
-"s_hidden": 128
+"n_hidden": 3
+"s_hidden": 256
 "regular": 
   - "actions"
-  - "theta_0"
+  - "s_0"
+  - "phi_0"
+  - "Theta_0"
 "conditioning":
-  - "rel_p"
+  - "rel_l"
   # - name: "rel_p"
   #   weight: 1.0
   # - name: "delta_0"
 "loss_fn": "mse"
-"dataset": "data/training_datasets/5.parquet"
+"dataset": "data/training_datasets/v2_5.parquet"
 "denoising_steps": 30
 "batch_size": 100
 "lr": 1.0e-3
-"dataset_size": 1000
+"dataset_size": 5000
 "reporters":
   - "tqdm"
 "noise_schedule": "linear_scaled"

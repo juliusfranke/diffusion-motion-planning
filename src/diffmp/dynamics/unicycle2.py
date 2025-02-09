@@ -1,7 +1,27 @@
+from typing import List
 import numpy as np
 import numpy.typing as npt
 
 from diffmp.dynamics.base import DynamicsBase
+from diffmp.utils import (
+    CalculatedParameter,
+    DatasetParameter,
+    get_default_parameter_set,
+)
+import pandas as pd
+
+
+def theta_to_Theta(df: pd.DataFrame) -> pd.DataFrame:
+    df[("states", "Theta_0_x")] = np.sin(df[("states", "theta_0")])
+    df[("states", "Theta_0_y")] = np.cos(df[("states", "theta_0")])
+    return df
+
+
+def Theta_to_theta(df: pd.DataFrame) -> pd.DataFrame:
+    df[("states", "theta_0")] = np.atan2(
+        df[("states", "Theta_0_y")], df[("states", "Theta_0_x")]
+    )
+    return df
 
 
 class UnicycleSecondOrder(DynamicsBase):
@@ -14,8 +34,68 @@ class UnicycleSecondOrder(DynamicsBase):
         max_acc_abs: float,
         max_angular_acc: float,
         dt: float,
+        timesteps: int,
         **kwargs,
     ) -> None:
+        parameter_set = get_default_parameter_set()
+        actions_columns = []
+        for i in range(timesteps):
+            actions_columns.append(("actions", f"a_{i}"))
+            actions_columns.append(("actions", f"dphi_{i}"))
+
+        parameter_set.add_parameters(
+            [
+                DatasetParameter("actions", 2 * timesteps, 0, actions_columns),
+                DatasetParameter(
+                    "theta_0",
+                    1,
+                    0,
+                    [("states", "theta_0")],
+                ),
+                DatasetParameter(
+                    "s_0",
+                    1,
+                    0,
+                    [("states", "s_0")],
+                ),
+                DatasetParameter(
+                    "phi_0",
+                    1,
+                    0,
+                    [("states", "phi_0")],
+                ),
+                DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
+                DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
+            ],
+            condition=False,
+        )
+        states_columns = []
+        for i in range(timesteps + 1):
+            states_columns.append(("actions", f"x_{i}"))
+            states_columns.append(("actions", f"y_{i}"))
+            states_columns.append(("actions", f"s_{i}"))
+            states_columns.append(("actions", f"phi_{i}"))
+        parameter_set.add_parameters(
+            [
+                CalculatedParameter(
+                    "states",
+                    5 * (timesteps + 1),
+                    0,
+                    [(f"s_{i}", f"phi_{i}") for i in range(timesteps)],
+                    ["actions", "theta_0"],
+                    lambda x: x,
+                ),
+                CalculatedParameter(
+                    "Theta_0",
+                    2,
+                    0,
+                    [("states", "Theta_0_x"), ("states", "Theta_0_y")],
+                    ["theta_0"],
+                    theta_to_Theta,
+                ),
+            ],
+            condition=False,
+        )
         DynamicsBase.__init__(
             self,
             q=["x", "y", "theta", "s", "phi"],
@@ -29,13 +109,55 @@ class UnicycleSecondOrder(DynamicsBase):
                 "min": {"a": -max_acc_abs, "dphi": -max_angular_acc},
                 "max": {"a": max_acc_abs, "dphi": max_angular_acc},
             },
+            parameter_set=parameter_set,
+            timesteps=timesteps,
         )
 
-    def _step(self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+    def _step(
+        self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
         next = q.copy()
         next[:, 0] += np.cos(q[:, 2]) * q[:, 3] * self.dt
         next[:, 1] += np.sin(q[:, 2]) * q[:, 3] * self.dt
         next[:, 2] += q[:, 4] * self.dt
         next[:, 3] += u[:, 0] * self.dt
         next[:, 4] += u[:, 1] * self.dt
+
+        next[:, 3] = np.clip(next[:, 3], self._q_lims["min"][3], self._q_lims["max"][3])
+        next[:, 4] = np.clip(next[:, 4], self._q_lims["min"][4], self._q_lims["max"][4])
         return next
+
+    def to_mp(self, data: npt.NDArray):
+        reg_cols, _ = self.parameter_set.get_columns()
+        columns = pd.MultiIndex.from_tuples(reg_cols)
+        df = pd.DataFrame(data, columns=columns)
+        assert df.actions.shape[1] == self.timesteps * self.u_dim
+        assert ("states", "phi_0") in columns
+        assert ("states", "s_0") in columns
+        has_theta_0 = ("states", "theta_0") in columns
+        has_Theta_0 = ("states", "Theta_0_x") in columns and (
+            "states",
+            "Theta_0_y",
+        ) in columns
+        assert has_theta_0 or has_Theta_0
+
+        if has_Theta_0:
+            df = Theta_to_theta(df)
+
+        # actions = df.actions.to_numpy().reshape(self.timesteps, df.shape[0], self.u_dim)
+        actions = np.swapaxes(
+            df.actions.to_numpy().reshape(df.shape[0], self.timesteps, self.u_dim), 0, 1
+        )
+        actions = np.clip(actions, -0.25, 0.25)
+        state = np.zeros((df.shape[0], self.q_dim))
+        state[:, 2] = df.states.theta_0
+        state[:, 3] = df.states.s_0
+        state[:, 4] = df.states.phi_0
+        states: List[npt.NDArray] = [state]
+        for i in range(self.timesteps):
+            state = self.step(state, actions[i], clip=True)
+            states.append(state)
+
+        mp = {"states": np.array(states), "actions": actions}
+        # breakpoint()
+        return mp

@@ -1,3 +1,4 @@
+from typing import List
 import numpy as np
 import numpy.typing as npt
 
@@ -7,6 +8,20 @@ from diffmp.utils.config import (
     DatasetParameter,
     get_default_parameter_set,
 )
+import pandas as pd
+
+
+def theta_to_Theta(df: pd.DataFrame) -> pd.DataFrame:
+    df[("states", "Theta_0_x")] = np.cos(df[("states", "theta_0")])
+    df[("states", "Theta_0_y")] = np.sin(df[("states", "theta_0")])
+    return df
+
+
+def Theta_to_theta(df: pd.DataFrame) -> pd.DataFrame:
+    df[("states", "theta_0")] = np.atan2(
+        df[("states", "Theta_0_y")], df[("states", "Theta_0_x")]
+    )
+    return df
 
 
 class UnicycleFirstOrder(DynamicsBase):
@@ -54,12 +69,12 @@ class UnicycleFirstOrder(DynamicsBase):
                     "Theta_0",
                     2,
                     0,
-                    [("Theta_0_x", "Theta_0_y")],
+                    [("states", "Theta_0_x"), ("states", "Theta_0_y")],
                     ["theta_0"],
-                    lambda x: x,
+                    theta_to_Theta,
                 ),
             ],
-            condition=True,
+            condition=False,
         )
 
         DynamicsBase.__init__(
@@ -72,6 +87,7 @@ class UnicycleFirstOrder(DynamicsBase):
                 "max": {"s": max_vel, "phi": max_angular_vel},
             },
             parameter_set=parameter_set,
+            timesteps=timesteps,
         )
 
     def _step(
@@ -82,3 +98,33 @@ class UnicycleFirstOrder(DynamicsBase):
         next[:, 1] += np.sin(q[:, 2]) * u[:, 0] * self.dt
         next[:, 2] += u[:, 1] * self.dt
         return next
+
+    def to_mp(self, data: npt.NDArray):
+        reg_cols, _ = self.parameter_set.get_columns()
+        columns = pd.MultiIndex.from_tuples(reg_cols)
+        df = pd.DataFrame(data, columns=columns)
+        assert df.actions.shape[1] == self.timesteps * self.u_dim
+        has_theta_0 = ("states", "theta_0") in columns
+        has_Theta_0 = ("states", "Theta_0_x") in columns and (
+            "states",
+            "Theta_0_y",
+        ) in columns
+        assert has_theta_0 or has_Theta_0
+
+        if has_Theta_0:
+            df = Theta_to_theta(df)
+
+        actions = np.swapaxes(
+            df.actions.to_numpy().reshape(df.shape[0], self.timesteps, self.u_dim), 0, 1
+        )
+        actions = np.clip(actions, -0.25, 0.25)
+        state = np.zeros((df.shape[0], self.q_dim))
+        state[:, 2] = df.states.theta_0
+        states: List[npt.NDArray] = [state]
+        for i in range(self.timesteps):
+            state = self.step(state, actions[i], clip=True)
+            states.append(state)
+
+        mp = {"states": np.array(states), "actions": actions}
+        # breakpoint()
+        return mp

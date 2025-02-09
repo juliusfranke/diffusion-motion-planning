@@ -6,8 +6,11 @@ import diffmp
 from .model import Model
 
 
-def sample(model: Model, n_samples: int, instance: diffmp.problems.Instance):
+def sample(
+    model: Model, n_samples: int, instance: diffmp.problems.Instance
+) -> torch.Tensor:
     model.to(diffmp.utils.DEVICE)
+    model.eval()
     if model.config.conditioning:
         conditioning = diffmp.utils.condition_for_sampling(
             model.config, n_samples, instance
@@ -63,4 +66,4 @@ def sample(model: Model, n_samples: int, instance: diffmp.problems.Instance):
         )
         x_t += betas[t] ** 0.5 * z
 
-    return x_t
+    return x_t.detach()

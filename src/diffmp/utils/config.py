@@ -150,7 +150,7 @@ def calc_rel_p(df: pd.DataFrame) -> pd.DataFrame:
             agg
         )
     )
-    df.columns = cols
+    df = df.reindex(columns=cols)
 
     env_group = [col for col in df.columns if col == ("env", AnyStr())]
     if env_group:
