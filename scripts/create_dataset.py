@@ -39,10 +39,12 @@ class Task:
 def execute_task(task: Task):
     tmp1 = tempfile.NamedTemporaryFile()
     tmp2 = tempfile.NamedTemporaryFile()
-    assert isinstance(task.instance.data, Dict)
-
+    if isinstance(task.instance.data, Dict):
+        instance_data  = task.instance.data
+    else: 
+        instance_data = task.instance.to_dict()
     result = dbcbs_py.db_cbs(
-        task.instance.data,
+        instance_data,
         tmp1.name,
         tmp2.name,
         task.config,
@@ -224,16 +226,16 @@ def main():
     configurations = [data]
     # exec_task = partial(execute_task, env_dict=environments)
 
-    input = instances[0].data
-    assert isinstance(input, dict)
-    result = dbcbs_py.db_cbs(
-        input,
-        "/tmp/1.txt",
-        "/tmp/2.txt",
-        configurations[0],
-        timelimit_db_astar,
-        timelimit_db_cbs,
-    )
+    # input = instances[0].data
+    # assert isinstance(input, dict)
+    # result = dbcbs_py.db_cbs(
+    #     input,
+    #     "/tmp/1.txt",
+    #     "/tmp/2.txt",
+    #     configurations[0],
+    #     timelimit_db_astar,
+    #     timelimit_db_cbs,
+    # )
     tasks = []
     for instance in instances:
         for configuration in configurations:

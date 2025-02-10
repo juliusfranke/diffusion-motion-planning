@@ -82,6 +82,7 @@ class UnicycleFirstOrder(DynamicsBase):
             q=["x", "y", "theta"],
             u=["s", "phi"],
             dt=dt,
+            q_lims={"min": {"theta": -np.pi}, "max": {"theta": np.pi}},
             u_lims={
                 "min": {"s": min_vel, "phi": min_angular_vel},
                 "max": {"s": max_vel, "phi": max_angular_vel},

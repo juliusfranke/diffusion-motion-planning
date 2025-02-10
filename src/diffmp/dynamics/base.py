@@ -30,6 +30,21 @@ class DynamicsBase(ABC):
         self.parameter_set = parameter_set
         self.timesteps = timesteps
 
+    def random_state(self, **kwargs) -> List[float]:
+        state = np.zeros(self.q_dim)
+        for i, name in enumerate(self.q):
+            if value := kwargs.get(name):
+                state[i] = value
+                continue
+            min = self._q_lims["min"][i]
+            max = self._q_lims["max"][i]
+            if np.isinf(min) or np.isinf(max):
+                value = 0
+            else:
+                value = np.random.random() * (max - min) + min
+            state[i] = value
+        return state.tolist()
+
     def step(
         self,
         q: npt.NDArray[np.floating],
@@ -84,11 +99,10 @@ class DynamicsBase(ABC):
         Returns:
             The next state when performing the input action on the input state.
         """
-        pass
+        ...
 
     @abstractmethod
-    def to_mp(self, data: npt.NDArray) -> Dict:
-        pass
+    def to_mp(self, data: npt.NDArray) -> Dict: ...
 
     @staticmethod
     def _lims_to_vec(

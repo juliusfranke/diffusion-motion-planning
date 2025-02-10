@@ -2,13 +2,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 import diffmp
+from diffmp.problems.environment import Environment
 
 
 @dataclass
 class Robot:
     start: List[float]
     goal: List[float]
-    # _type: diffmp.dynamics.DynamicsBase
+    dynamics: str
+
+    def to_dict(self) -> Dict:
+        return {"start": self.start, "goal": self.goal, "type": self.dynamics}
 
     @classmethod
     def from_dict(cls, data: Dict[str, List[float] | str]) -> Robot:
@@ -17,7 +21,15 @@ class Robot:
         assert isinstance(data["type"], str)
         start = data["start"]
         goal = data["goal"]
-        # _type = diffmp.dynamics.get_dynamics(data["type"], 5)
+        dynamics = data["type"]
+        return cls(start=start, goal=goal, dynamics=dynamics)
 
-        # return cls(start=start, goal=goal, _type=_type)
-        return cls(start=start, goal=goal)
+    @classmethod
+    def random(cls, env: Environment, dynamics_type: str) -> Robot:
+        dynamics = diffmp.dynamics.get_dynamics(dynamics_type, 1)
+        x_start, y_start = env.random_free()
+        start = dynamics.random_state(x=x_start, y=y_start)
+        x_goal, y_goal = env.random_free()
+        goal = dynamics.random_state(x=x_goal, y=y_goal)
+
+        return cls(start=start, goal=goal, dynamics=dynamics_type)

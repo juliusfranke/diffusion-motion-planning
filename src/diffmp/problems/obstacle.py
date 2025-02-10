@@ -1,8 +1,22 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 import math
-from typing import Tuple, Dict, cast
+import numpy as np
+from typing import NamedTuple, Tuple, Dict, cast
+
+
+class Bounds2D(NamedTuple):
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+
+    def random_point(self) -> Tuple[float, float]:
+        random_x = np.random.random() * (self.x_max - self.x_min) + self.x_min
+        random_y = np.random.random() * (self.y_max - self.y_min) + self.y_min
+        return (random_x, random_y)
 
 
 @dataclass
@@ -12,6 +26,18 @@ class Obstacle(ABC):
     @abstractmethod
     def area(self) -> float: ...
 
+    @abstractmethod
+    def is_inside(self, x: float, y: float) -> bool: ...
+
+    @abstractmethod
+    def to_dict(self) -> Dict: ...
+
+    @classmethod
+    @abstractmethod
+    def random(
+        cls, bounds_environment: Bounds2D, bounds_size: Bounds2D
+    ) -> Obstacle: ...
+
 
 @dataclass
 class BoxObstacle(Obstacle):
@@ -20,6 +46,20 @@ class BoxObstacle(Obstacle):
     def area(self) -> float:
         return self.size[0] * self.size[1]
 
+    def to_dict(self) -> Dict:
+        return {"type": "box", "center": self.center, "size": self.size}
+
+    def is_inside(self, x: float, y: float) -> bool:
+        x_is_in = abs(self.center[0] - x) <= self.size[0] / 2
+        y_is_in = abs(self.center[1] - y) <= self.size[1] / 2
+        return x_is_in and y_is_in
+
+    @classmethod
+    def random(cls, bounds_environment: Bounds2D, bounds_size: Bounds2D) -> Obstacle:
+        center = bounds_environment.random_point()
+        size = bounds_size.random_point()
+        return cls(center=center, size=size)
+
 
 @dataclass
 class CylinderObstacle(Obstacle):
@@ -27,6 +67,21 @@ class CylinderObstacle(Obstacle):
 
     def area(self) -> float:
         return math.pi * self.radius**2
+
+    def is_inside(self, x: float, y: float) -> bool:
+        d_x = abs(self.center[0] - x)
+        d_y = abs(self.center[1] - y)
+        d = np.linalg.norm([d_x, d_y])
+        return bool(d <= self.radius)
+
+    def to_dict(self) -> Dict:
+        return {"type": "box", "center": self.center, "radius": self.radius}
+
+    @classmethod
+    def random(cls, bounds_environment: Bounds2D, bounds_size: Bounds2D) -> Obstacle:
+        center = bounds_environment.random_point()
+        radius = np.min(bounds_size.random_point())
+        return cls(center=center, radius=radius)
 
 
 class ObstacleType(Enum):

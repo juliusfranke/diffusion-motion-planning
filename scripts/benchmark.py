@@ -40,7 +40,12 @@ def main():
         bugtrap = diffmp.problems.Instance.from_yaml(Path("../example/bugtrap_2.yaml"))
     else:
         raise NotImplementedError
-    instances = [bugtrap]
+    obstacle_bounds = diffmp.problems.obstacle.Bounds2D(1,2,1,2)
+    random_instance = diffmp.problems.Instance.random(5, 10, 5, obstacle_bounds,[dynamics])
+    # instances = [bugtrap]
+    instances = [random_instance]
+
+    breakpoint()
     configurations_model = []
     for mp_path in mp_paths:
         temp = {"mp_path": mp_path}
@@ -53,16 +58,16 @@ def main():
     # exec_task = partial(execute_task, env_dict=environments)
     tasks = []
     for instance in instances:
-        for configuration in configurations_model:
-            tasks += [
-                Task(
-                    instance,
-                    configuration,
-                    timelimit_db_astar,
-                    timelimit_db_cbs,
-                )
-                for _ in range(trials // len(mp_paths))
-            ]
+        # for configuration in configurations_model:
+        #     tasks += [
+        #         Task(
+        #             instance,
+        #             configuration,
+        #             timelimit_db_astar,
+        #             timelimit_db_cbs,
+        #         )
+        #         for _ in range(trials // len(mp_paths))
+            # ]
         for configuration in configurations_base:
             tasks += [
                 Task(
