@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 import diffmp
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -15,8 +15,9 @@ class DynamicsBase(ABC):
         u: List[str],
         parameter_set: diffmp.utils.ParameterSet,
         timesteps: int,
-        q_lims: None | Dict[str, Dict[str, float]] = None,
-        u_lims: None | Dict[str, Dict[str, float]] = None,
+        name: str,
+        q_lims: Optional[Dict[str, Dict[str, float]]] = None,
+        u_lims: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> None:
         self.dt = dt
         self.q = q
@@ -29,6 +30,7 @@ class DynamicsBase(ABC):
         self._u_lims = self._lims_to_vec(u_lims, self.u)
         self.parameter_set = parameter_set
         self.timesteps = timesteps
+        self.name = name
 
     def random_state(self, **kwargs) -> List[float]:
         state = np.zeros(self.q_dim)
@@ -78,13 +80,28 @@ class DynamicsBase(ABC):
 
         if clip:
             for i in range(self.q_dim):
-                q[:, i] = np.clip(
-                    q[:, i], self._q_lims["min"][i], self._q_lims["max"][i]
+                q_new[:, i] = np.clip(
+                    q_new[:, i], self._q_lims["min"][i], self._q_lims["max"][i]
                 )
         assert (self._q_lims["min"] <= q_new).all() and (
             (q_new <= self._q_lims["max"]).all()
-        ).all(), "q is not within bounds"
+        ).all(), f"q is not within bounds {q_new[:,2], np.max(q_new[:,2]), np.min(q_new[:,2]), q_new.shape, self._q_lims}"
         return q_new
+
+    def prepare_out(self, data: npt.NDArray) -> pd.DataFrame:
+        reg_cols, _ = self.parameter_set.get_columns()
+        columns = pd.MultiIndex.from_tuples(reg_cols)
+        df = pd.DataFrame(data, columns=columns)
+        for param in self.parameter_set.iter_regular():
+            if isinstance(param, diffmp.utils.DatasetParameter):
+                continue
+            if param.fr is None:
+                continue
+            df = param.fr(df)
+        return df
+
+    @abstractmethod
+    def to_mp(self, data: npt.NDArray) -> Dict: ...
 
     @abstractmethod
     def _step(
@@ -101,9 +118,6 @@ class DynamicsBase(ABC):
         """
         ...
 
-    @abstractmethod
-    def to_mp(self, data: npt.NDArray) -> Dict: ...
-
     @staticmethod
     def _lims_to_vec(
         lims: None | Dict[str, Dict[str, float]], names: List[str]
@@ -115,17 +129,21 @@ class DynamicsBase(ABC):
             }
         lower = np.array(
             [
-                lims["min"][name]
-                if isinstance(lims["min"], dict) and name in lims["min"].keys()
-                else -np.inf
+                (
+                    lims["min"][name]
+                    if isinstance(lims["min"], dict) and name in lims["min"].keys()
+                    else -np.inf
+                )
                 for name in names
             ]
         )
         upper = np.array(
             [
-                lims["max"][name]
-                if isinstance(lims["max"], dict) and name in lims["max"].keys()
-                else np.inf
+                (
+                    lims["max"][name]
+                    if isinstance(lims["max"], dict) and name in lims["max"].keys()
+                    else np.inf
+                )
                 for name in names
             ]
         )

@@ -32,15 +32,6 @@ def param_to_col(
     cols: List[str] = []
     for param in parameter_set.iter_data():
         cols.extend([str(col) for col in param.cols])
-        # col_1 = param.col_1
-        # col_2 = param.col_2
-        # cols.extend(
-        #     [
-        #         str(col)
-        #         for col in available_columns
-        #         if col_1 == col[0] and col_2 == col[1]
-        #     ]
-        # )
     return cols
 
 
@@ -54,19 +45,25 @@ def load_dataset(
         ast.literal_eval(col) for col in metadata.column_names
     ]
 
-    load_columns = param_to_col(parameter_set, available_columns) + [str(("misc", "rel_c"))]
+    load_columns = param_to_col(parameter_set, available_columns) + [
+        str(("misc", "rel_c"))
+    ]
 
     dataset = pd.read_parquet(config.dataset, columns=load_columns)
+    print(dataset.shape[0])
     dataset = calc_param(parameter_set, dataset)
 
     [dataset.drop(columns=p.cols, inplace=True) for p in parameter_set.required]
-    # TODO Weights
-    # weights = dataset[("misc", "weights")] = dataset.misc.rel_c**10
-    # dataset = dataset.sample(config.dataset_size, weights= weights)
+
+    dataset.drop_duplicates(inplace=True)
+    print(dataset.shape[0])
+    if dataset.shape[0] > config.dataset_size:
+        weights = dataset[("misc", "weights")] = dataset.misc.rel_c**10
+        dataset = dataset.sample(config.dataset_size, weights=weights)
     # dataset = dataset.sort_values(("misc", "weight"), ascending=False)
-    dataset = dataset.nlargest(config.dataset_size,("misc", "rel_c"))
+    # dataset = dataset.nlargest(config.dataset_size, ("misc", "rel_c"))
     reg_cols, cond_cols = parameter_set.get_columns()
-    print(reg_cols,"\n", cond_cols)
+    print(reg_cols, "\n", cond_cols)
     regular = dataset[reg_cols]
     conditioning = dataset[cond_cols]
     regular = torch.tensor(regular.to_numpy(), device=diffmp.utils.DEVICE)
@@ -88,18 +85,43 @@ def condition_for_sampling(
     config: diffmp.torch.Config, n_samples: int, instance: diffmp.problems.Instance
 ) -> torch.Tensor:
     data: Dict[Tuple[str, str], npt.NDArray] = {}
-    for condition in config.dynamics.parameter_set:
-        if condition not in config.conditioning:
-            continue
+    # for condition in config.dynamics.parameter_set:
+    for condition in config.dynamics.parameter_set.iter_condition():
+        # if condition not in config.conditioning:
+        #     continue
         match condition.name:
             case "theta_s":
-                data[("q_start", "theta_0")] = (
+                data[("env", "theta_s")] = (
                     np.ones(n_samples) * instance.robots[0].start[2]
                 )
+            case "Theta_s":
+                data[("env", "Theta_s_x")] = np.ones(n_samples) * np.cos(
+                    instance.robots[0].start[2]
+                )
+                data[("env", "Theta_s_y")] = np.ones(n_samples) * np.sin(
+                    instance.robots[0].start[2]
+                )
+            case "Theta_g":
+                data[("env", "Theta_g_x")] = np.ones(n_samples) * np.cos(
+                    instance.robots[0].goal[2]
+                )
+                data[("env", "Theta_g_y")] = np.ones(n_samples) * np.sin(
+                    instance.robots[0].goal[2]
+                )
             case "theta_g":
-                data[("q_goal", "theta_0")] = (
+                data[("env", "theta_g")] = (
                     np.ones(n_samples) * instance.robots[0].goal[2]
                 )
+            case "s_s":
+                data[("env", "s_s")] = np.ones(n_samples) * instance.robots[0].start[3]
+            case "s_g":
+                data[("env", "s_g")] = np.ones(n_samples) * instance.robots[0].goal[3]
+            case "phi_s":
+                data[("env", "phi_s")] = (
+                    np.ones(n_samples) * instance.robots[0].start[4]
+                )
+            case "phi_g":
+                data[("env", "phi_g")] = np.ones(n_samples) * instance.robots[0].goal[4]
             case "area_blocked":
                 data[("environment", "area_blocked")] = (
                     np.ones(n_samples) * instance.environment.area_blocked
@@ -144,3 +166,16 @@ def condition_for_sampling(
     df = pd.DataFrame(data)
 
     return torch.tensor(df.to_numpy(), device=diffmp.utils.DEVICE)
+
+
+def theta_to_Theta(df: pd.DataFrame, col1: str, i: str = "0") -> pd.DataFrame:
+    df[(col1, f"Theta_{i}_x")] = np.cos(df[(col1, f"theta_{i}")])
+    df[(col1, f"Theta_{i}_y")] = np.sin(df[(col1, f"theta_{i}")])
+    return df
+
+
+def Theta_to_theta(df: pd.DataFrame, col1: str, i: str = "0") -> pd.DataFrame:
+    df[(col1, f"theta_{i}")] = np.atan2(
+        df[(col1, f"Theta_{i}_y")], df[(col1, f"Theta_{i}_x")]
+    )
+    return df

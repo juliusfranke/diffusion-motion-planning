@@ -2,13 +2,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import pandas as pd
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Optional
 
 import torch
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
-DYN_CONFIG_PATH = Path("../../dynoplan/dynobench/models")
+DYN_CONFIG_PATH = Path("../dynoplan/dynobench/models")
 if not DYN_CONFIG_PATH.exists() or not DYN_CONFIG_PATH.is_dir():
     DYN_CONFIG_PATH = Path("data/dynamics")
     if not DYN_CONFIG_PATH.exists() or not DYN_CONFIG_PATH.is_dir():
@@ -41,6 +41,7 @@ class DatasetParameter(Parameter):
 class CalculatedParameter(Parameter):
     requires: List[str]
     to: Callable[[pd.DataFrame], pd.DataFrame]
+    fr: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
 
 
 class ParameterSet:

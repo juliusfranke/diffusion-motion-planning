@@ -1,3 +1,4 @@
+from functools import partial
 from typing import List
 import numpy as np
 import numpy.typing as npt
@@ -8,20 +9,8 @@ from diffmp.utils.config import (
     DatasetParameter,
     get_default_parameter_set,
 )
+from diffmp.utils import Theta_to_theta, theta_to_Theta
 import pandas as pd
-
-
-def theta_to_Theta(df: pd.DataFrame) -> pd.DataFrame:
-    df[("states", "Theta_0_x")] = np.cos(df[("states", "theta_0")])
-    df[("states", "Theta_0_y")] = np.sin(df[("states", "theta_0")])
-    return df
-
-
-def Theta_to_theta(df: pd.DataFrame) -> pd.DataFrame:
-    df[("states", "theta_0")] = np.atan2(
-        df[("states", "Theta_0_y")], df[("states", "Theta_0_x")]
-    )
-    return df
 
 
 class UnicycleFirstOrder(DynamicsBase):
@@ -33,6 +22,7 @@ class UnicycleFirstOrder(DynamicsBase):
         max_angular_vel: float,
         dt: float,
         timesteps: int,
+        name: str,
         **kwargs,
     ) -> None:
         parameter_set = get_default_parameter_set()
@@ -58,20 +48,13 @@ class UnicycleFirstOrder(DynamicsBase):
         parameter_set.add_parameters(
             [
                 CalculatedParameter(
-                    "states",
-                    3 * timesteps,
-                    0,
-                    [(f"s_{i}", f"phi_{i}") for i in range(timesteps)],
-                    ["actions", "theta_0"],
-                    lambda x: x,
-                ),
-                CalculatedParameter(
                     "Theta_0",
                     2,
                     0,
                     [("states", "Theta_0_x"), ("states", "Theta_0_y")],
                     ["theta_0"],
-                    theta_to_Theta,
+                    partial(theta_to_Theta, col1="states"),
+                    partial(Theta_to_theta, col1="states"),
                 ),
             ],
             condition=False,
@@ -89,6 +72,7 @@ class UnicycleFirstOrder(DynamicsBase):
             },
             parameter_set=parameter_set,
             timesteps=timesteps,
+            name=name,
         )
 
     def _step(
@@ -97,7 +81,11 @@ class UnicycleFirstOrder(DynamicsBase):
         next = q.copy()
         next[:, 0] += np.cos(q[:, 2]) * u[:, 0] * self.dt
         next[:, 1] += np.sin(q[:, 2]) * u[:, 0] * self.dt
-        next[:, 2] += u[:, 1] * self.dt
+        theta = next[:, 2] + u[:, 1] * self.dt
+        theta = np.where(theta < -np.pi, theta + 2 * np.pi, theta)
+        theta = np.where(theta > np.pi, theta - 2 * np.pi, theta)
+        next[:, 2] = theta
+
         return next
 
     def to_mp(self, data: npt.NDArray):
@@ -113,12 +101,12 @@ class UnicycleFirstOrder(DynamicsBase):
         assert has_theta_0 or has_Theta_0
 
         if has_Theta_0:
-            df = Theta_to_theta(df)
+            df = Theta_to_theta(df, col1="states")
 
         actions = np.swapaxes(
             df.actions.to_numpy().reshape(df.shape[0], self.timesteps, self.u_dim), 0, 1
         )
-        actions = np.clip(actions, -0.25, 0.25)
+        actions = np.clip(actions, -0.5, 0.5)
         state = np.zeros((df.shape[0], self.q_dim))
         state[:, 2] = df.states.theta_0
         states: List[npt.NDArray] = [state]

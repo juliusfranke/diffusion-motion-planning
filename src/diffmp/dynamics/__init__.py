@@ -15,7 +15,7 @@ def get_dynamics(name: str, timesteps: int) -> DynamicsBase:
     path = (diffmp.utils.DYN_CONFIG_PATH / name).with_suffix(".yaml")
     config = diffmp.utils.load_yaml(path)
     config["timesteps"] = timesteps
-    dyn = Dynamics[config["dynamics"]].value(**config)
+    dyn = Dynamics[config["dynamics"]].value(**config, name=name)
     return dyn
 
 

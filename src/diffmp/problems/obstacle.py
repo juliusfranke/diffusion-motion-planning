@@ -3,7 +3,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 import math
+import random
 import numpy as np
+from shapely import Point, Polygon
 from typing import NamedTuple, Tuple, Dict, cast
 
 
@@ -27,10 +29,13 @@ class Obstacle(ABC):
     def area(self) -> float: ...
 
     @abstractmethod
-    def is_inside(self, x: float, y: float) -> bool: ...
+    def is_inside(self, x: float, y: float, clearance: float = 0.0) -> bool: ...
 
     @abstractmethod
     def to_dict(self) -> Dict: ...
+
+    @abstractmethod
+    def geometry(self) -> Polygon: ...
 
     @classmethod
     @abstractmethod
@@ -49,16 +54,33 @@ class BoxObstacle(Obstacle):
     def to_dict(self) -> Dict:
         return {"type": "box", "center": self.center, "size": self.size}
 
-    def is_inside(self, x: float, y: float) -> bool:
-        x_is_in = abs(self.center[0] - x) <= self.size[0] / 2
-        y_is_in = abs(self.center[1] - y) <= self.size[1] / 2
+    def is_inside(self, x: float, y: float, clearance: float = 0.0) -> bool:
+        x_is_in = abs(self.center[0] - x) - clearance <= self.size[0] / 2
+        y_is_in = abs(self.center[1] - y) - clearance <= self.size[1] / 2
         return x_is_in and y_is_in
 
+    def geometry(self) -> Polygon:
+        geometry = Polygon(
+            (
+                (self.center[0] - self.size[0] / 2, self.center[1] - self.size[1] / 2),
+                (self.center[0] + self.size[0] / 2, self.center[1] - self.size[1] / 2),
+                (self.center[0] + self.size[0] / 2, self.center[1] + self.size[1] / 2),
+                (self.center[0] - self.size[0] / 2, self.center[1] + self.size[1] / 2),
+            )
+        )
+        return geometry
+
     @classmethod
-    def random(cls, bounds_environment: Bounds2D, bounds_size: Bounds2D) -> Obstacle:
+    def random(cls, bounds_environment: Bounds2D, max_area: float) -> Obstacle:
         center = bounds_environment.random_point()
-        size = bounds_size.random_point()
-        return cls(center=center, size=size)
+        min_side_xy = max_area / 5
+        max_side_x = bounds_environment.x_max / 3
+        size_x = np.random.random() * (max_side_x - min_side_xy) + min_side_xy
+        max_side_y = min(max_area / size_x, bounds_environment.y_max / 3)
+        size_y = np.random.random() * (max_side_y - min_side_xy) + min_side_xy
+        size = [size_x, size_y]
+        random.shuffle(size)
+        return cls(center=list(center), size=list(size))
 
 
 @dataclass
@@ -68,19 +90,23 @@ class CylinderObstacle(Obstacle):
     def area(self) -> float:
         return math.pi * self.radius**2
 
-    def is_inside(self, x: float, y: float) -> bool:
+    def is_inside(self, x: float, y: float, clearance: float = 0.0) -> bool:
         d_x = abs(self.center[0] - x)
         d_y = abs(self.center[1] - y)
         d = np.linalg.norm([d_x, d_y])
-        return bool(d <= self.radius)
+        return bool(d - clearance <= self.radius)
 
     def to_dict(self) -> Dict:
-        return {"type": "box", "center": self.center, "radius": self.radius}
+        return {"type": "box", "center": list(self.center), "radius": self.radius}
+
+    def geometry(self) -> Polygon:
+        geometry = Point(self.center).buffer(self.radius)
+        return geometry
 
     @classmethod
-    def random(cls, bounds_environment: Bounds2D, bounds_size: Bounds2D) -> Obstacle:
+    def random(cls, bounds_environment: Bounds2D, max_area: float) -> Obstacle:
         center = bounds_environment.random_point()
-        radius = np.min(bounds_size.random_point())
+        radius = np.random.random() * (max_area - max_area / 5) + max_area / 5
         return cls(center=center, radius=radius)
 
 

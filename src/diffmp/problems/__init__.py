@@ -1,4 +1,4 @@
-from .instance import Instance
+from .instance import Instance, Baseline
 from .environment import Environment
 from .obstacle import (
     BoxObstacle,
@@ -12,6 +12,7 @@ from .robots import Robot
 
 __all__ = [
     "Instance",
+    "Baseline",
     "Environment",
     "Robot",
     "BoxObstacle",

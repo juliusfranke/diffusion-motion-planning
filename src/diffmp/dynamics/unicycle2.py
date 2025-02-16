@@ -1,3 +1,4 @@
+from functools import partial
 from typing import List
 import numpy as np
 import numpy.typing as npt
@@ -7,21 +8,10 @@ from diffmp.utils import (
     CalculatedParameter,
     DatasetParameter,
     get_default_parameter_set,
+    theta_to_Theta,
+    Theta_to_theta,
 )
 import pandas as pd
-
-
-def theta_to_Theta(df: pd.DataFrame) -> pd.DataFrame:
-    df[("states", "Theta_0_x")] = np.sin(df[("states", "theta_0")])
-    df[("states", "Theta_0_y")] = np.cos(df[("states", "theta_0")])
-    return df
-
-
-def Theta_to_theta(df: pd.DataFrame) -> pd.DataFrame:
-    df[("states", "theta_0")] = np.atan2(
-        df[("states", "Theta_0_y")], df[("states", "Theta_0_x")]
-    )
-    return df
 
 
 class UnicycleSecondOrder(DynamicsBase):
@@ -35,6 +25,7 @@ class UnicycleSecondOrder(DynamicsBase):
         max_angular_acc: float,
         dt: float,
         timesteps: int,
+        name: str,
         **kwargs,
     ) -> None:
         parameter_set = get_default_parameter_set()
@@ -66,6 +57,10 @@ class UnicycleSecondOrder(DynamicsBase):
                 ),
                 DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
                 DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
+                DatasetParameter("s_s", 1, 0, [("env", "s_s")]),
+                DatasetParameter("s_g", 1, 0, [("env", "s_g")]),
+                DatasetParameter("phi_s", 1, 0, [("env", "phi_s")]),
+                DatasetParameter("phi_g", 1, 0, [("env", "phi_g")]),
             ],
             condition=False,
         )
@@ -78,20 +73,31 @@ class UnicycleSecondOrder(DynamicsBase):
         parameter_set.add_parameters(
             [
                 CalculatedParameter(
-                    "states",
-                    5 * (timesteps + 1),
-                    0,
-                    [(f"s_{i}", f"phi_{i}") for i in range(timesteps)],
-                    ["actions", "theta_0"],
-                    lambda x: x,
-                ),
-                CalculatedParameter(
                     "Theta_0",
                     2,
                     0,
                     [("states", "Theta_0_x"), ("states", "Theta_0_y")],
                     ["theta_0"],
-                    theta_to_Theta,
+                    partial(theta_to_Theta, col1="states"),
+                    partial(Theta_to_theta, col1="states"),
+                ),
+                CalculatedParameter(
+                    "Theta_s",
+                    2,
+                    0,
+                    [("env", "Theta_s_x"), ("env", "Theta_s_y")],
+                    ["theta_s"],
+                    partial(theta_to_Theta, col1="env", i="s"),
+                    partial(Theta_to_theta, col1="env", i="s"),
+                ),
+                CalculatedParameter(
+                    "Theta_g",
+                    2,
+                    0,
+                    [("env", "Theta_g_x"), ("env", "Theta_g_y")],
+                    ["theta_g"],
+                    partial(theta_to_Theta, col1="env", i="g"),
+                    partial(Theta_to_theta, col1="env", i="g"),
                 ),
             ],
             condition=False,
@@ -102,8 +108,8 @@ class UnicycleSecondOrder(DynamicsBase):
             u=["a", "dphi"],
             dt=dt,
             q_lims={
-                "min": {"s": min_vel, "phi": min_angular_vel},
-                "max": {"s": max_vel, "phi": max_angular_vel},
+                "min": {"theta": -np.pi, "s": min_vel, "phi": min_angular_vel},
+                "max": {"theta": np.pi, "s": max_vel, "phi": max_angular_vel},
             },
             u_lims={
                 "min": {"a": -max_acc_abs, "dphi": -max_angular_acc},
@@ -111,38 +117,63 @@ class UnicycleSecondOrder(DynamicsBase):
             },
             parameter_set=parameter_set,
             timesteps=timesteps,
+            name=name,
         )
+
+    def random_state(self, **kwargs) -> List[float]:
+        state = super().random_state(**kwargs)
+        state[3] = 0
+        state[4] = 0
+        return state
 
     def _step(
         self, q: npt.NDArray[np.floating], u: npt.NDArray[np.floating]
     ) -> npt.NDArray[np.floating]:
-        next = q.copy()
-        next[:, 0] += np.cos(q[:, 2]) * q[:, 3] * self.dt
-        next[:, 1] += np.sin(q[:, 2]) * q[:, 3] * self.dt
-        next[:, 2] += q[:, 4] * self.dt
-        next[:, 3] += u[:, 0] * self.dt
-        next[:, 4] += u[:, 1] * self.dt
+        # V = np.zeros(q.shape)
 
+        yaw = q[:, 2]
+        vv = q[:, 3]
+        w = q[:, 4]
+
+        c = np.cos(yaw)
+        s = np.sin(yaw)
+
+        a = u[:, 0]
+        w_dot = u[:, 1]
+
+        V = np.zeros(q.shape)
+        V[:, 0] = vv * c
+        V[:, 1] = vv * s
+        V[:, 2] = w
+        V[:, 3] = a
+        V[:, 4] = w_dot
+
+        next = q + V * self.dt
+        next[:, 2] = np.where(next[:, 2] < -np.pi, next[:, 2] + 2 * np.pi, next[:, 2])
+        next[:, 2] = np.where(next[:, 2] > np.pi, next[:, 2] - 2 * np.pi, next[:, 2])
         next[:, 3] = np.clip(next[:, 3], self._q_lims["min"][3], self._q_lims["max"][3])
         next[:, 4] = np.clip(next[:, 4], self._q_lims["min"][4], self._q_lims["max"][4])
+
         return next
 
     def to_mp(self, data: npt.NDArray):
-        reg_cols, _ = self.parameter_set.get_columns()
-        columns = pd.MultiIndex.from_tuples(reg_cols)
-        df = pd.DataFrame(data, columns=columns)
+        # reg_cols, _ = self.parameter_set.get_columns()
+        # columns = pd.MultiIndex.from_tuples(reg_cols)
+        # df = pd.DataFrame(data, columns=columns)
+        df = self.prepare_out(data)
         assert df.actions.shape[1] == self.timesteps * self.u_dim
-        assert ("states", "phi_0") in columns
-        assert ("states", "s_0") in columns
-        has_theta_0 = ("states", "theta_0") in columns
-        has_Theta_0 = ("states", "Theta_0_x") in columns and (
-            "states",
-            "Theta_0_y",
-        ) in columns
-        assert has_theta_0 or has_Theta_0
+        assert ("states", "phi_0") in df.columns
+        assert ("states", "s_0") in df.columns
+        assert ("states", "theta_0") in df.columns
+        has_theta_0 = ("states", "theta_0") in df.columns
+        # has_Theta_0 = ("states", "Theta_0_x") in columns and (
+        #     "states",
+        #     "Theta_0_y",
+        # ) in columns
+        # assert has_theta_0 or has_Theta_0
 
-        if has_Theta_0:
-            df = Theta_to_theta(df)
+        # if has_Theta_0:
+        #     df = Theta_to_theta(df)
 
         # actions = df.actions.to_numpy().reshape(self.timesteps, df.shape[0], self.u_dim)
         actions = np.swapaxes(
@@ -159,6 +190,4 @@ class UnicycleSecondOrder(DynamicsBase):
             states.append(state)
 
         mp = {"states": np.array(states), "actions": actions}
-        # breakpoint()
         return mp
-

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 import diffmp
 from diffmp.problems.environment import Environment
 
@@ -25,11 +25,17 @@ class Robot:
         return cls(start=start, goal=goal, dynamics=dynamics)
 
     @classmethod
-    def random(cls, env: Environment, dynamics_type: str) -> Robot:
+    def random(cls, env: Environment, dynamics_type: str) -> Optional[Robot]:
         dynamics = diffmp.dynamics.get_dynamics(dynamics_type, 1)
-        x_start, y_start = env.random_free()
+        start_free = env.random_free(clearance=0.26)
+        if start_free is None:
+            return None
+        x_start, y_start = start_free
         start = dynamics.random_state(x=x_start, y=y_start)
-        x_goal, y_goal = env.random_free()
+        goal_free = env.random_free(clearance=0.26)
+        if goal_free is None:
+            return None
+        x_goal, y_goal = goal_free
         goal = dynamics.random_state(x=x_goal, y=y_goal)
 
         return cls(start=start, goal=goal, dynamics=dynamics_type)

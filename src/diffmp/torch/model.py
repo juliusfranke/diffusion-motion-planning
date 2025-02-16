@@ -7,6 +7,7 @@ import torch
 from torch import Tensor, float64, save
 from torch.nn import Linear, Module, ModuleList, ReLU
 from torch.nn.init import kaiming_uniform_
+import yaml
 
 import diffmp
 
@@ -29,8 +30,34 @@ class Config(NamedTuple):
     noise_schedule: NoiseSchedule
     dataset_size: int
     reporters: List[diffmp.utils.Reporter]
+    test_instances: List[diffmp.problems.Instance]
     optimizer: Any = torch.optim.Adam
     validation_split: float = 0.8
+
+    def to_dict(self) -> Dict:
+        config = {
+            "dynamics": self.dynamics.name,
+            "timesteps": self.timesteps,
+            "problem": self.problem,
+            "n_hidden": self.n_hidden,
+            "s_hidden": self.s_hidden,
+            "regular": [r.name for r in self.regular],
+            "conditioning": [c.name for c in self.conditioning],
+            "loss_fn": self.loss_fn.name,
+            "dataset": str(self.dataset),
+            "denoising_steps": self.denoising_steps,
+            "batch_size": self.batch_size,
+            "lr": self.lr,
+            "noise_schedule": self.noise_schedule.name,
+            "dataset_size": self.dataset_size,
+            "reporters": [diffmp.utils.Reporters(type(r)).name for r in self.reporters],
+            "validation_split": self.validation_split,
+        }
+        return config
+
+    def to_yaml(self, path: Path) -> None:
+        with open(path, "w") as file:
+            yaml.safe_dump(self.to_dict(), file)
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
@@ -40,8 +67,16 @@ class Config(NamedTuple):
     @classmethod
     def from_dict(cls, data: Dict) -> Config:
         required = []
+        data["test_instances"] = [
+            diffmp.problems.Instance.from_yaml(p)
+            for p in Path(f"data/test_instances/{data['dynamics']}/").glob("*.yaml")
+        ]
+        for instance in data["test_instances"]:
+            assert isinstance(instance.baseline, diffmp.problems.Baseline)
+
         data["dynamics"] = diffmp.dynamics.get_dynamics(data["dynamics"], 5)
         reg_params = []
+        print(data["regular"])
         for param_str in data["regular"]:
             param = data["dynamics"].parameter_set[param_str]
             reg_params.append(param)
@@ -118,9 +153,17 @@ class Model(Module):
 
     def save(self):
         if isinstance(self.path, Path):
-            save(self.state_dict(), self.path)
+            save(self.state_dict(), self.path.with_suffix(".pt"))
+            self.config.to_yaml(self.path.with_suffix(".yaml"))
         else:
-            raise Exception
+            raise Exception("Model path was not set")
+
+    @classmethod
+    def load(cls, path: Path) -> Model:
+        config = Config.from_yaml(path.with_suffix(".yaml"))
+        model = cls(config)
+        model.load_state_dict(torch.load(path.with_suffix(".pt"), weights_only=True))
+        return model
 
     def forward(self, x: Tensor) -> Tensor:
         for i in range(len(self.linears) - 1):
