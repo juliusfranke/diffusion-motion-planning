@@ -35,32 +35,34 @@ if __name__ == "__main__":
     # dynamics = "unicycle1_v0"
     # dynamics = "unicycle2_v0"
     config_path = Path(sys.argv[1])
-    model_name = sys.argv[2]
-    model_path = Path(f"data/models/{model_name}")
-    config = diffmp.torch.Config.from_yaml(config_path)
-    dynamics = config.dynamics.name
+    # model_name = sys.argv[2]
+    # model_path = Path(f"data/models/{model_name}")
+    epochs = 500
+    if config_path.suffixes[0] == ".standard":
+        config = diffmp.torch.Config.from_yaml(config_path)
+        dynamics = config.dynamics.name
+        model = diffmp.torch.Model(config)
+        # model.path = model_path
 
-    # model_path = Path(f"data/models/{dynamics}_random_2.pt")
-    model = diffmp.torch.Model(config)
-    model.path = model_path
+        diffmp.torch.train(model, epochs)
+    elif config_path.suffixes[0] == ".composite":
+        composite_config = diffmp.torch.CompositeConfig.from_yaml(config_path)
+        diffmp.torch.train_composite(composite_config, 1000)
 
-    epochs = 10000
-    exports = 1
-    diffmp.torch.train(model, epochs)
     # diffmp.torch.Model.load(Path("data/models/yeehaaa"))
+    # breakpoint()
+    # if dynamics == "unicycle1_v0":
+    #     instance = diffmp.problems.Instance.from_dict(
+    #         diffmp.utils.load_yaml(Path("../example/bugtrap.yaml"))
+    #     )
+    # elif dynamics == "unicycle2_v0":
+    #     instance = diffmp.problems.Instance.from_dict(
+    #         diffmp.utils.load_yaml(Path("../example/bugtrap_2.yaml"))
+    #     )
+    # else:
+    #     raise NotImplementedError
 
-    if dynamics == "unicycle1_v0":
-        instance = diffmp.problems.Instance.from_dict(
-            diffmp.utils.load_yaml(Path("../example/bugtrap.yaml"))
-        )
-    elif dynamics == "unicycle2_v0":
-        instance = diffmp.problems.Instance.from_dict(
-            diffmp.utils.load_yaml(Path("../example/bugtrap_2.yaml"))
-        )
-    else:
-        raise NotImplementedError
-
-    for i in range(exports):
-        diffmp.utils.export(
-            model, instance, Path(f"data/output/{dynamics}/rand_{i}.yaml")
-        )
+    # for i in range(exports):
+    #     diffmp.utils.export(
+    #         model, instance, Path(f"data/output/{dynamics}/rand_{i}.yaml")
+    # )
