@@ -1,0 +1,268 @@
+{
+    "$defs": {
+        "commonConditioning": {
+            "enum": [
+                "area",
+                "area_blocked",
+                "area_free",
+                "env_width",
+                "env_height",
+                "n_obstacles",
+                "p_obstacles",
+                "delta_0",
+                "rel_l"
+            ]
+        }
+    },
+    "type": "object",
+    "properties": {
+        "problem": {
+            "type": "string",
+            "description": "Problem instance name (not used)",
+            "default": "Any"
+        },
+        "dynamics": {
+            "type": "string",
+            "enum": [
+                "unicycle1_v0",
+                "unicycle2_v0",
+                "car1_v0"
+            ],
+            "description": "Robot dynamics"
+        },
+        "timesteps": {
+            "type": "integer",
+            "description": "Motion primitive length"
+        },
+        "n_hidden": {
+            "type": "integer",
+            "description": "Amount of hidden layers"
+        },
+        "s_hidden": {
+            "type": "integer",
+            "description": "Size of hidden layers"
+        },
+        "denoising_steps": {
+            "type": "integer",
+            "description": "Amount of denoising steps"
+        },
+        "batch_size": {
+            "type": "integer",
+            "description": "Batch size"
+        },
+        "lr": {
+            "type": "number",
+            "description": "Learning rate"
+        },
+        "dataset_size": {
+            "type": "integer",
+            "description": "Amount of rows selected from the datset"
+        },
+        "dataset": {
+            "type": "string",
+            "description": "Path to the dataset (.parquet)"
+        },
+        "loss_fn": {
+            "type": "string",
+            "enum": [
+                "mse",
+                "mae",
+                "sinkhorn"
+            ],
+            "description": "Loss function used"
+        },
+        "noise_schedule": {
+            "type": "string",
+            "enum": [
+                "linear",
+                "linear_scaled",
+                "sigmoid"
+            ],
+            "description": "Noise schedule"
+        },
+        "regular": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string"
+            },
+            "description": "The data that is generated"
+        },
+        "conditioning": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string"
+            },
+            "description": "The data used for conditioning"
+        },
+        "reporters": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "enum": [
+                    "tqdm",
+                    "aim",
+                    "optuna"
+                ]
+            },
+            "description": "How to report the training"
+        },
+        "weights": {
+            "type": "object",
+            "misc": {
+                "type": "object",
+                "rel_c": {
+                    "type": "number"
+                }
+            },
+            "description": "Weight for sampling"
+        }
+    },
+    "required": [
+        "dynamics",
+        "timesteps",
+        "n_hidden",
+        "s_hidden",
+        "regular",
+        "loss_fn",
+        "dataset",
+        "denoising_steps",
+        "batch_size",
+        "lr",
+        "dataset_size",
+        "reporters",
+        "noise_schedule"
+    ],
+    "allOf": [
+        {
+            "if": {
+                "properties": {
+                    "dynamics": {
+                        "const": "unicycle1_v0"
+                    }
+                }
+            },
+            "then": {
+                "properties": {
+                    "regular": {
+                        "items": {
+                            "enum": [
+                                "actions",
+                                "theta_0",
+                                "Theta_0"
+                            ]
+                        }
+                    },
+                    "conditioning": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/$defs/commonConditioning"
+                                },
+                                {
+                                    "enum": [
+                                        "theta_s",
+                                        "theta_g",
+                                        "Theta_s",
+                                        "Theta_g"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "dynamics": {
+                        "const": "unicycle2_v0"
+                    }
+                }
+            },
+            "then": {
+                "properties": {
+                    "regular": {
+                        "items": {
+                            "enum": [
+                                "actions",
+                                "theta_0",
+                                "s_0",
+                                "phi_0",
+                                "Theta_0"
+                            ]
+                        }
+                    },
+                    "conditioning": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/$defs/commonConditioning"
+                                },
+                                {
+                                    "enum": [
+                                        "theta_s",
+                                        "theta_g",
+                                        "s_s",
+                                        "s_g",
+                                        "phi_s",
+                                        "phi_g",
+                                        "Theta_s",
+                                        "Theta_g"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "dynamics": {
+                        "const": "car1_v0"
+                    }
+                }
+            },
+            "then": {
+                "properties": {
+                    "regular": {
+                        "items": {
+                            "enum": [
+                                "actions",
+                                "theta_0",
+                                "theta_2_0",
+                                "Theta_0",
+                                "Theta_2_0"
+                            ]
+                        }
+                    },
+                    "conditioning": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/$defs/commonConditioning"
+                                },
+                                {
+                                    "enum": [
+                                        "theta_s",
+                                        "theta_2_s",
+                                        "theta_2_g",
+                                        "Theta_s",
+                                        "Theta_2_s",
+                                        "Theta_g",
+                                        "Theta_2_g"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}

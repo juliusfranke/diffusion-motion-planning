@@ -1,0 +1,10 @@
+{
+    "yaml.schemas": {
+        "./schemas/standard.config.json": [
+            "*.standard.yaml",
+        ],
+        "./schemas/composite.config.json": [
+            "*.composite.yaml",
+        ]
+    }
+}

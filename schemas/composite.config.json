@@ -1,0 +1,24 @@
+{
+    "type": "object",
+    "properties": {
+        "dynamics": {
+            "type": "string",
+            "enum": [
+                "unicycle1_v0",
+                "unicycle2_v0",
+                "car1_v0"
+            ],
+            "description": "Robot dynamics"
+        },
+        "models": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Standard models associated"
+        }
+    },
+    "required": [
+        "dynamics"
+    ]
+}
