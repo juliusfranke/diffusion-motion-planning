@@ -1,6 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+import numpy as np
+from matplotlib.axes import Axes
+import matplotlib.pyplot as plt
 import diffmp
 from diffmp.problems.environment import Environment
 
@@ -10,6 +14,28 @@ class Robot:
     start: List[float]
     goal: List[float]
     dynamics: str
+
+    def plot(self, ax: Optional[Axes] = None) -> None:
+        if ax is None:
+            fig, ax = plt.subplots(1)
+        assert isinstance(ax, Axes)
+        ar_len = 0.5
+        dx_s = ar_len * np.cos(self.start[2])
+        dy_s = ar_len * np.sin(self.start[2])
+        ax.arrow(
+            self.start[0], self.start[1], dx_s, dy_s, fc="red", ec="red", head_width=0.2
+        )
+        dx_g = ar_len * np.cos(self.goal[2])
+        dy_g = ar_len * np.sin(self.goal[2])
+        ax.arrow(
+            self.goal[0],
+            self.goal[1],
+            dx_g,
+            dy_g,
+            fc="green",
+            ec="green",
+            head_width=0.2,
+        )
 
     def to_dict(self) -> Dict:
         return {"start": self.start, "goal": self.goal, "type": self.dynamics}

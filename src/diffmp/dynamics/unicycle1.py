@@ -4,10 +4,11 @@ import numpy as np
 import numpy.typing as npt
 
 from diffmp.dynamics.base import DynamicsBase
-from diffmp.utils.config import (
+from diffmp.utils import (
     CalculatedParameter,
     DatasetParameter,
     get_default_parameter_set,
+    ParameterSeq,
 )
 from diffmp.utils import Theta_to_theta, theta_to_Theta
 import pandas as pd
@@ -31,33 +32,53 @@ class UnicycleFirstOrder(DynamicsBase):
             actions_set.append(("actions", f"s_{i}"))
             actions_set.append(("actions", f"phi_{i}"))
 
+        regular_parameters: ParameterSeq = [
+            DatasetParameter("actions", 2 * timesteps, 0, actions_set),
+            DatasetParameter(
+                "theta_0",
+                1,
+                0,
+                [("states", "theta_0")],
+            ),
+            CalculatedParameter(
+                "Theta_0",
+                2,
+                0,
+                [("states", "Theta_0_x"), ("states", "Theta_0_y")],
+                ["theta_0"],
+                partial(theta_to_Theta, col1="states"),
+                partial(Theta_to_theta, col1="states"),
+            ),
+            DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
+            DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
+        ]
+        condition_parameters: ParameterSeq = [
+            CalculatedParameter(
+                "Theta_s",
+                2,
+                0,
+                [("env", "Theta_s_x"), ("env", "Theta_s_y")],
+                ["theta_s"],
+                partial(theta_to_Theta, col1="env", i="s"),
+                partial(Theta_to_theta, col1="env", i="s"),
+            ),
+            CalculatedParameter(
+                "Theta_g",
+                2,
+                0,
+                [("env", "Theta_g_x"), ("env", "Theta_g_y")],
+                ["theta_g"],
+                partial(theta_to_Theta, col1="env", i="g"),
+                partial(Theta_to_theta, col1="env", i="g"),
+            ),
+        ]
         parameter_set.add_parameters(
-            [
-                DatasetParameter("actions", 2 * timesteps, 0, actions_set),
-                DatasetParameter(
-                    "theta_0",
-                    1,
-                    0,
-                    [("states", "theta_0")],
-                ),
-                DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
-                DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
-            ],
+            regular_parameters,
             condition=False,
         )
         parameter_set.add_parameters(
-            [
-                CalculatedParameter(
-                    "Theta_0",
-                    2,
-                    0,
-                    [("states", "Theta_0_x"), ("states", "Theta_0_y")],
-                    ["theta_0"],
-                    partial(theta_to_Theta, col1="states"),
-                    partial(Theta_to_theta, col1="states"),
-                ),
-            ],
-            condition=False,
+            condition_parameters,
+            condition=True,
         )
 
         DynamicsBase.__init__(
@@ -89,19 +110,9 @@ class UnicycleFirstOrder(DynamicsBase):
         return next
 
     def to_mp(self, data: npt.NDArray):
-        reg_cols, _ = self.parameter_set.get_columns()
-        columns = pd.MultiIndex.from_tuples(reg_cols)
-        df = pd.DataFrame(data, columns=columns)
+        df = self.prepare_out(data)
         assert df.actions.shape[1] == self.timesteps * self.u_dim
-        has_theta_0 = ("states", "theta_0") in columns
-        has_Theta_0 = ("states", "Theta_0_x") in columns and (
-            "states",
-            "Theta_0_y",
-        ) in columns
-        assert has_theta_0 or has_Theta_0
-
-        if has_Theta_0:
-            df = Theta_to_theta(df, col1="states")
+        assert ("states", "theta_0") in df.columns
 
         actions = np.swapaxes(
             df.actions.to_numpy().reshape(df.shape[0], self.timesteps, self.u_dim), 0, 1
@@ -115,5 +126,4 @@ class UnicycleFirstOrder(DynamicsBase):
             states.append(state)
 
         mp = {"states": np.array(states), "actions": actions}
-        # breakpoint()
         return mp

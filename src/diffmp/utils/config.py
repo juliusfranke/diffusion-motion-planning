@@ -1,8 +1,10 @@
-from collections.abc import Callable
 from dataclasses import dataclass
 import pandas as pd
 from pathlib import Path
-from typing import Any, List, Tuple, Optional
+from typing import TYPE_CHECKING, Any, List, Sequence, Tuple, Optional
+from collections.abc import Callable
+import diffmp
+
 
 import torch
 
@@ -44,6 +46,9 @@ class CalculatedParameter(Parameter):
     fr: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
 
 
+ParameterSeq = Sequence[DatasetParameter | CalculatedParameter]
+
+
 class ParameterSet:
     def __init__(self):
         self.data_param_regular: List[DatasetParameter] = []
@@ -73,9 +78,7 @@ class ParameterSet:
                 pass
             param_list.append(parameter)
 
-    def add_parameters(
-        self, parameters: List[DatasetParameter | CalculatedParameter], condition: bool
-    ):
+    def add_parameters(self, parameters: ParameterSeq, condition: bool):
         for param in parameters:
             self.add_parameter(param, condition)
 

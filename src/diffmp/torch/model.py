@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TYPE_CHECKING
 
 import torch
 from torch import Tensor, float64, save
@@ -11,7 +12,47 @@ import yaml
 
 import diffmp
 
+if TYPE_CHECKING:
+    from diffmp.utils.reporting import OptunaReporter, Reporter
+
 from .schedules import NoiseSchedule
+
+
+@dataclass
+class CompositeConfig:
+    dynamics: str
+    models: List[Model]
+    optuna: Optional[OptunaReporter] = None
+    allocation: Optional[Dict[int, int]] = None
+
+    @classmethod
+    def from_yaml(cls, path: Path, load_if_exists: bool = True) -> CompositeConfig:
+        data = diffmp.utils.load_yaml(path)
+        return cls.from_dict(data, load_if_exists)
+
+    @classmethod
+    def from_dict(cls, data: Dict, load_if_exists: bool = True) -> CompositeConfig:
+        dynamics = diffmp.dynamics.get_dynamics(data["dynamics"], 1).name
+        models: List[Model] = []
+        models_path = Path("data/models")
+        for model_name in data["models"]:
+            config_path = models_path / (model_name + ".yaml")
+            weights_path = models_path / (model_name + ".pt")
+            if load_if_exists and weights_path.exists():
+                model = Model.load(Path(f"data/models/{model_name}"))
+            elif config_path.exists():
+                config = Config.from_yaml(config_path)
+                model = Model(config)
+                model.path = models_path / model_name
+            else:
+                raise Exception
+            assert model.config.dynamics.name == dynamics
+            models.append(model)
+        assert len(models) == len(set(m.dynamics.timesteps for m in models))
+        if data.get("allocation"):
+            assert isinstance(data["allocation"], dict)
+            return cls(dynamics=dynamics, models=models, allocation=data["allocation"])
+        return cls(dynamics=dynamics, models=models)
 
 
 class Config(NamedTuple):
@@ -31,6 +72,7 @@ class Config(NamedTuple):
     dataset_size: int
     reporters: List[diffmp.utils.Reporter]
     test_instances: List[diffmp.problems.Instance]
+    weights: Dict[str, Dict[str, float]]
     optimizer: Any = torch.optim.Adam
     validation_split: float = 0.8
 
@@ -43,6 +85,7 @@ class Config(NamedTuple):
             "s_hidden": self.s_hidden,
             "regular": [r.name for r in self.regular],
             "conditioning": [c.name for c in self.conditioning],
+            "weights": self.weights,
             "loss_fn": self.loss_fn.name,
             "dataset": str(self.dataset),
             "denoising_steps": self.denoising_steps,
@@ -65,18 +108,28 @@ class Config(NamedTuple):
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: Dict) -> Config:
+    def from_dict(cls, data: Dict, name: Optional[str] = None) -> Config:
         required = []
         data["test_instances"] = [
             diffmp.problems.Instance.from_yaml(p)
             for p in Path(f"data/test_instances/{data['dynamics']}/").glob("*.yaml")
         ]
         for instance in data["test_instances"]:
+            instance.results = []
             assert isinstance(instance.baseline, diffmp.problems.Baseline)
 
-        data["dynamics"] = diffmp.dynamics.get_dynamics(data["dynamics"], 5)
+        data["dynamics"] = diffmp.dynamics.get_dynamics(
+            data["dynamics"], data["timesteps"]
+        )
+        # weights = {}
+        if data.get("weights"):
+            assert isinstance(data["weights"], dict)
+            for weight_col1, layer2 in data["weights"].items():
+                assert isinstance(layer2, dict)
+            #     for weight_col2, value in layer2.items():
+            #         weights[(weight_col1, weight_col2)] = value
+        # data["weights"] = weights
         reg_params = []
-        print(data["regular"])
         for param_str in data["regular"]:
             param = data["dynamics"].parameter_set[param_str]
             reg_params.append(param)
@@ -147,22 +200,27 @@ class Model(Module):
         self.linears = ModuleList(layers)
 
         for layer in self.linears:
-            kaiming_uniform_(layer.weight)
+            kaiming_uniform_(layer.weight)  # pyright: ignore
 
         self.optimizer = config.optimizer(self.parameters(), lr=self.config.lr)
 
     def save(self):
         if isinstance(self.path, Path):
-            save(self.state_dict(), self.path.with_suffix(".pt"))
-            self.config.to_yaml(self.path.with_suffix(".yaml"))
+            config_path = self.path.parent / (self.path.name + ".yaml")
+            weights_path = self.path.parent / (self.path.name + ".pt")
+            save(self.state_dict(), weights_path)
+            self.config.to_yaml(config_path)
         else:
             raise Exception("Model path was not set")
 
     @classmethod
     def load(cls, path: Path) -> Model:
-        config = Config.from_yaml(path.with_suffix(".yaml"))
+        config_path = path.parent / (path.name + ".yaml")
+        weights_path = path.parent / (path.name + ".pt")
+        config = Config.from_yaml(config_path)
         model = cls(config)
-        model.load_state_dict(torch.load(path.with_suffix(".pt"), weights_only=True))
+        model.load_state_dict(torch.load(weights_path, weights_only=True))
+        model.path = path
         return model
 
     def forward(self, x: Tensor) -> Tensor:

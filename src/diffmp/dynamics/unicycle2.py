@@ -165,17 +165,6 @@ class UnicycleSecondOrder(DynamicsBase):
         assert ("states", "phi_0") in df.columns
         assert ("states", "s_0") in df.columns
         assert ("states", "theta_0") in df.columns
-        has_theta_0 = ("states", "theta_0") in df.columns
-        # has_Theta_0 = ("states", "Theta_0_x") in columns and (
-        #     "states",
-        #     "Theta_0_y",
-        # ) in columns
-        # assert has_theta_0 or has_Theta_0
-
-        # if has_Theta_0:
-        #     df = Theta_to_theta(df)
-
-        # actions = df.actions.to_numpy().reshape(self.timesteps, df.shape[0], self.u_dim)
         actions = np.swapaxes(
             df.actions.to_numpy().reshape(df.shape[0], self.timesteps, self.u_dim), 0, 1
         )

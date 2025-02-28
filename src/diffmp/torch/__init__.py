@@ -4,11 +4,11 @@ from typing import Callable
 from torch import Tensor
 
 from .dataset import DiffusionDataset
-from .loss import mae, mse, sinkhorn
-from .model import Config, Model
+from .loss import mae, mse, sinkhorn, compute_test_loss, ExponentialMovingAverage
+from .model import CompositeConfig, Config, Model
 from .sample import sample
 from .schedules import NoiseSchedule
-from .train import train
+from .train import train, train_composite
 
 
 class LossFunction:
@@ -27,11 +27,15 @@ class Loss(Enum):
 
 __all__ = [
     "Config",
+    "CompositeConfig",
     "Model",
     "NoiseSchedule",
     "LossFunction",
     "Loss",
+    "compute_test_loss",
+    "ExponentialMovingAverage",
     "DiffusionDataset",
     "train",
+    "train_composite",
     "sample",
 ]

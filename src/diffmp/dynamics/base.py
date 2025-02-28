@@ -63,6 +63,7 @@ class DynamicsBase(ABC):
         Returns:
             The next state when performing the input action on the input state.
         """
+        eps = 1e-3
         q = np.atleast_2d(q).astype(float)
         u = np.atleast_2d(u).astype(float)
         assert q.shape[1] == self.q_dim
@@ -72,8 +73,8 @@ class DynamicsBase(ABC):
                 u[:, i] = np.clip(
                     u[:, i], self._u_lims["min"][i], self._u_lims["max"][i]
                 )
-        assert (self._u_lims["min"] <= u).all() and (
-            (u <= self._u_lims["max"]).all()
+        assert (self._u_lims["min"] - eps <= u).all() and (
+            (u <= self._u_lims["max"] + eps).all()
         ).all(), "u is not within bounds"
 
         q_new = self._step(q, u)
@@ -81,7 +82,9 @@ class DynamicsBase(ABC):
         if clip:
             for i in range(self.q_dim):
                 q_new[:, i] = np.clip(
-                    q_new[:, i], self._q_lims["min"][i], self._q_lims["max"][i]
+                    q_new[:, i],
+                    self._q_lims["min"][i] + eps,
+                    self._q_lims["max"][i] - eps,
                 )
         assert (self._q_lims["min"] <= q_new).all() and (
             (q_new <= self._q_lims["max"]).all()

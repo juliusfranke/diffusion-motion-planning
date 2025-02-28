@@ -1,5 +1,4 @@
 from __future__ import annotations
-import pandas as pd
 import diffmp
 import yaml
 from pathlib import Path
@@ -14,7 +13,7 @@ import dbcbs_py
 DEFAULT_CONFIG = {
     "delta_0": 0.5,
     "delta_rate": 0.9,
-    "num_primitives_0": 200,
+    "num_primitives_0": 100,
     "num_primitives_rate": 1.5,
     "alpha": 0.5,
     "filter_duplicates": True,
@@ -68,21 +67,24 @@ class Task:
     solutions: List[Solution]
 
 
-def execute_task(task: Task):
+def execute_task(task: Task) -> Task:
     tmp1 = tempfile.NamedTemporaryFile()
     tmp2 = tempfile.NamedTemporaryFile()
     if isinstance(task.instance.data, Dict):
         instance_data = task.instance.data
     else:
         instance_data = task.instance.to_dict()
-    results = dbcbs_py.db_cbs(
-        instance_data,
-        tmp1.name,
-        tmp2.name,
-        task.config,
-        task.timelimit_db_astar,
-        task.timelimit_db_cbs,
-    )
+    try:
+        results = dbcbs_py.db_cbs(
+            instance_data,
+            tmp1.name,
+            tmp2.name,
+            task.config,
+            task.timelimit_db_astar,
+            task.timelimit_db_cbs,
+        )
+    except IndexError:
+        results = []
     task.solutions = [Solution.from_db_cbs(sol) for sol in results]
 
     tmp1.close()
@@ -90,39 +92,19 @@ def execute_task(task: Task):
     return task
 
 
-def out_to_mps(actions: npt.NDArray, states: npt.NDArray, out_path: Path):
+def out_to_mps(actions: npt.NDArray, states: npt.NDArray):
     length = actions.shape[1]
     mps = []
     # breakpoint()
     for i in range(length):
         mp = {
-            # "time_stamp": 0,
-            # "cost": 0.5,
-            # "feasible": 1,
-            # "traj_feas": 1,
-            # "goal_feas": 1,
-            # "start_feas": 1,
-            # "col_feas": 1,
-            # "x_bounds_feas": 1,
-            # "u_bounds_feas": 1,
             "start": states[0, i, :].tolist(),
             "goal": states[-1, i, :].tolist(),
-            # "max_jump": 0,
-            # "max_collision": 0,
-            # "start_distance": 0,
-            # "goal_distance": 0,
-            # "x_bound_distance": 0,
-            # "u_bound_distance": 0,
-            # "num_states": 6,
-            # "num_actions": 5,
-            # "info": "i:480-s:0-l:5",
             "actions": actions[:, i, :].tolist(),
             "states": states[:, i, :].tolist(),
         }
         mps.append(mp)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as file:
-        yaml.safe_dump(mps, file, default_flow_style=None)
+    return mps
 
 
 def export(
@@ -134,4 +116,47 @@ def export(
     out = diffmp.torch.sample(model, n_mp, instance).detach().cpu().numpy()
 
     mps = model.dynamics.to_mp(out)
-    out_to_mps(mps["actions"], mps["states"], out_path)
+    dbcbs_mps = out_to_mps(mps["actions"], mps["states"])
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as file:
+        yaml.safe_dump(dbcbs_mps, file, default_flow_style=None)
+
+
+def distribute_motion_primitives(total_count, lengths):
+    lengths = np.array(lengths, dtype=float)
+
+    inv_lengths = 1 / lengths
+    proportions = inv_lengths / inv_lengths.sum()
+
+    counts = np.round(proportions * total_count).astype(int)
+
+    diff = total_count - counts.sum()
+    if diff != 0:
+        counts[np.argmax(proportions)] += diff
+
+    return dict(zip(lengths, counts))
+
+
+def export_composite(
+    composite_config: diffmp.torch.CompositeConfig,
+    instance: diffmp.problems.Instance,
+    out_path: Path,
+    n_mp: int = 100,
+) -> None:
+    primitives = []
+    distribution = composite_config.allocation
+    if not isinstance(distribution, dict):
+        distribution = distribute_motion_primitives(
+            n_mp, [m.dynamics.timesteps for m in composite_config.models]
+        )
+    for model in composite_config.models:
+        n_mp_model = distribution[model.dynamics.timesteps]
+        out = diffmp.torch.sample(model, n_mp_model, instance).detach().cpu().numpy()
+        mps = model.dynamics.to_mp(out)
+        dbcbs_mps = out_to_mps(mps["actions"], mps["states"])
+        primitives.extend(dbcbs_mps)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as file:
+        yaml.safe_dump(primitives, file, default_flow_style=None)

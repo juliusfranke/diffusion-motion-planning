@@ -4,11 +4,13 @@ import diffmp
 from .base import DynamicsBase
 from .unicycle1 import UnicycleFirstOrder
 from .unicycle2 import UnicycleSecondOrder
+from .car1 import CarWithTrailers
 
 
 class Dynamics(Enum):
     unicycle1 = UnicycleFirstOrder
     unicycle2 = UnicycleSecondOrder
+    car_with_trailers = CarWithTrailers
 
 
 def get_dynamics(name: str, timesteps: int) -> DynamicsBase:

@@ -1,3 +1,4 @@
+from typing import Sequence
 from .config import (
     DEVICE,
     DYN_CONFIG_PATH,
@@ -5,6 +6,7 @@ from .config import (
     DatasetParameter,
     CalculatedParameter,
     get_default_parameter_set,
+    ParameterSeq,
 )
 from .data import (
     condition_for_sampling,
@@ -21,7 +23,15 @@ from .reporting import (
     OptunaReporter,
     Reporters,
 )
-from .dbcbs_ext import export, Task, Solution, execute_task, DEFAULT_CONFIG
+from .dbcbs_ext import (
+    export,
+    export_composite,
+    Task,
+    Solution,
+    execute_task,
+    DEFAULT_CONFIG,
+)
+
 
 __all__ = [
     "DEVICE",
@@ -30,6 +40,7 @@ __all__ = [
     "DatasetParameter",
     "CalculatedParameter",
     "get_default_parameter_set",
+    "ParameterSeq",
     "load_dataset",
     "load_yaml",
     "theta_to_Theta",
@@ -42,6 +53,7 @@ __all__ = [
     "TensorBoardReporter",
     "Reporters",
     "export",
+    "export_composite",
     "Task",
     "Solution",
     "execute_task",

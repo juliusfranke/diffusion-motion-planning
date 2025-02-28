@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
+from matplotlib.axes import Axes
+import matplotlib.pyplot as plt
 import yaml
 
 import diffmp
@@ -36,6 +38,16 @@ class Instance:
     data: Optional[Dict] = None
     name: Optional[str] = None
     baseline: Optional[Baseline] = None
+    results: Optional[List[Baseline]] = None
+
+    def plot(self, ax: Optional[Axes] = None) -> None:
+        if ax is None:
+            fig, ax = plt.subplots(1)
+        assert isinstance(ax, Axes)
+        ax.set_aspect("equal")
+        self.environment.plot(ax)
+        self.robots[0].plot(ax)
+        ax.axis("off")
 
     def to_yaml(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

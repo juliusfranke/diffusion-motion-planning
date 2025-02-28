@@ -50,20 +50,24 @@ def load_dataset(
     ]
 
     dataset = pd.read_parquet(config.dataset, columns=load_columns)
-    print(dataset.shape[0])
+    # print(dataset.shape[0])
     dataset = calc_param(parameter_set, dataset)
 
     [dataset.drop(columns=p.cols, inplace=True) for p in parameter_set.required]
 
     dataset.drop_duplicates(inplace=True)
-    print(dataset.shape[0])
+    # print(dataset.shape[0])
     if dataset.shape[0] > config.dataset_size:
-        weights = dataset[("misc", "weights")] = dataset.misc.rel_c**10
+        weights = np.ones(dataset.shape[0])
+        for weight_col1, layer2 in config.weights.items():
+            for weight_col2, value in layer2.items():
+                weights *= dataset[(weight_col1, weight_col2)] ** value
+            # weights = dataset[("misc", "weights")] = dataset.misc.rel_c**2
         dataset = dataset.sample(config.dataset_size, weights=weights)
     # dataset = dataset.sort_values(("misc", "weight"), ascending=False)
     # dataset = dataset.nlargest(config.dataset_size, ("misc", "rel_c"))
     reg_cols, cond_cols = parameter_set.get_columns()
-    print(reg_cols, "\n", cond_cols)
+    # print(reg_cols, "\n", cond_cols)
     regular = dataset[reg_cols]
     conditioning = dataset[cond_cols]
     regular = torch.tensor(regular.to_numpy(), device=diffmp.utils.DEVICE)
@@ -94,12 +98,23 @@ def condition_for_sampling(
                 data[("env", "theta_s")] = (
                     np.ones(n_samples) * instance.robots[0].start[2]
                 )
+            case "theta_2_s":
+                data[("env", "theta_2_s")] = (
+                    np.ones(n_samples) * instance.robots[0].start[3]
+                )
             case "Theta_s":
                 data[("env", "Theta_s_x")] = np.ones(n_samples) * np.cos(
                     instance.robots[0].start[2]
                 )
                 data[("env", "Theta_s_y")] = np.ones(n_samples) * np.sin(
                     instance.robots[0].start[2]
+                )
+            case "Theta_2_s":
+                data[("env", "Theta_2_s_x")] = np.ones(n_samples) * np.cos(
+                    instance.robots[0].start[3]
+                )
+                data[("env", "Theta_2_s_y")] = np.ones(n_samples) * np.sin(
+                    instance.robots[0].start[3]
                 )
             case "Theta_g":
                 data[("env", "Theta_g_x")] = np.ones(n_samples) * np.cos(
@@ -108,9 +123,20 @@ def condition_for_sampling(
                 data[("env", "Theta_g_y")] = np.ones(n_samples) * np.sin(
                     instance.robots[0].goal[2]
                 )
+            case "Theta_2_g":
+                data[("env", "Theta_2_g_x")] = np.ones(n_samples) * np.cos(
+                    instance.robots[0].goal[3]
+                )
+                data[("env", "Theta_2_g_y")] = np.ones(n_samples) * np.sin(
+                    instance.robots[0].goal[3]
+                )
             case "theta_g":
                 data[("env", "theta_g")] = (
                     np.ones(n_samples) * instance.robots[0].goal[2]
+                )
+            case "theta_2_g":
+                data[("env", "theta_2_g")] = (
+                    np.ones(n_samples) * instance.robots[0].goal[3]
                 )
             case "s_s":
                 data[("env", "s_s")] = np.ones(n_samples) * instance.robots[0].start[3]

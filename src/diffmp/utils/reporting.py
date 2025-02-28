@@ -1,3 +1,4 @@
+from __future__ import annotations
 from enum import Enum
 import numpy as np
 from aim import Run
@@ -29,7 +30,7 @@ class Reporter:
         self.check_start()
         return None
 
-    def report_test(self, test_results: Dict, step: int, **kwargs) -> None:
+    def report_test(self, test_loss: float, step: int, **kwargs) -> None:
         self.check_start()
         return None
 
@@ -93,10 +94,10 @@ class TQDMReporter(Reporter):
         self.__update_postfix(step)
         return None
 
-    def report_test(self, test_results: Dict[str, float], step: int, **kwargs) -> None:
-        super().report_test(test_results, step, **kwargs)
+    def report_test(self, test_loss: float, step: int, **kwargs) -> None:
+        super().report_test(test_loss, step, **kwargs)
         if self.pbar is not None:
-            self.pbar.write(str(test_results))
+            self.pbar.write(f"Epoch {step+1}: {test_loss}")
         return None
 
     def close(self) -> None:
@@ -124,7 +125,7 @@ class AimReporter(Reporter):
         self.run = Run()
         self.best_train = np.inf
         self.best_val = np.inf
-        self.best_test = np.inf
+        self.best_test = 0
         self.best_success = -1
         self.best_duration = np.inf
         self.best_cost = np.inf
@@ -134,6 +135,12 @@ class AimReporter(Reporter):
         config_dict["conditioning"] = {key: True for key in config_dict["conditioning"]}
         config_dict["regular"] = {key: True for key in config_dict["regular"]}
         config_dict["reporters"] = {key: True for key in config_dict["reporters"]}
+        weights = {}
+        for cols, value in config_dict["weights"].items():
+            if cols[0] not in weights.keys():
+                weights[cols[0]] = {}
+            weights[cols[0]][cols[1]] = value
+        config_dict["weights"] = weights
         self.run["hparams"] = config_dict
         return super().report_hparams(config)
 
@@ -150,7 +157,6 @@ class AimReporter(Reporter):
             epoch=step,
             step=step,
         )
-
         return None
 
     def report_validate(self, validation_loss: float, step: int, **kwargs) -> None:
@@ -170,69 +176,46 @@ class AimReporter(Reporter):
             epoch=step,
             step=step,
         )
-
         return None
 
-    def report_test(self, test_results: Dict, step: int, **kwargs) -> None:
-        super().report_test(test_results, step, **kwargs)
-        self.run.track(test_results, context={"subset": "test"}, epoch=step, step=step)
-        success = test_results["success"]
-        duration = test_results["duration"]
-        cost = test_results["cost"]
-        self.best_success = max(success, self.best_success)
-        self.best_duration = min(duration, self.best_duration)
-        self.best_cost = min(cost, self.best_cost)
+    def report_test(self, test_loss, step: int, **kwargs) -> None:
+        super().report_test(test_loss, step, **kwargs)
         self.run.track(
-            {
-                "best_success": self.best_success,
-                "best_duration": self.best_duration,
-                "best_cost": self.best_cost,
-            },
-            context={"subset": "test"},
+            test_loss,
+            name="performance",
+            # context={"subset": "test"},
             epoch=step,
             step=step,
         )
-        # test_loss = (duration * cost) / ((success * 1000) ** 2)
-        test_loss = (-success) + cost + duration
-        self.best_test = min(test_loss, self.best_test)
-        self.run.track(
-            test_loss, name="loss", context={"subset": "test"}, epoch=step, step=step
-        )
+        self.best_test = max(test_loss, self.best_test)
         self.run.track(
             self.best_test,
-            name="best_loss",
-            context={"subset": "test"},
+            name="best_performance",
+            # context={"subset": "test"},
             epoch=step,
             step=step,
         )
         return None
-
-    # def report_loss(
-    #     self, train_loss: float, val_loss: float, step: int, **kwargs
-    # ) -> None:
-    #     self.run.track(
-    #         train_loss,
-    #     )
-    #     return super().report_loss(train_loss, val_loss, step, **kwargs)
-
-    # def report_test(self, test_results: Dict[str, float]) -> None:
-    #     return super().report_test(test_results)
 
 
 class OptunaReporter(Reporter):
-    def __init__(self) -> None:
+    def __init__(self, reported_min: int = 5) -> None:
         self.trial: Optional[optuna.Trial] = None
+        self.reported = 0
+        self.reported_min = reported_min
+        self.best_test = 0
 
-    def report_test(self, test_results: Dict, step: int, **kwargs) -> None:
+    def report_test(self, test_loss: float, step: int, **kwargs) -> None:
         assert isinstance(self.trial, optuna.Trial)
-        success = test_results["success"]
-        cost = test_results["cost"]
-        duration = test_results["duration"]
-        test_loss = (-success) + cost + duration
-        self.trial.report(test_loss, step)
-        if self.trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
-        return super().report_test(test_results, step, **kwargs)
+
+        self.reported += 1
+        if self.reported > self.reported_min:
+            self.trial.report(test_loss, step)
+            self.best_test = max(test_loss, self.best_test)
+
+            if self.trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+        return super().report_test(test_loss, step, **kwargs)
 
 
 class Reporters(Enum):

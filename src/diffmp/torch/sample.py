@@ -3,7 +3,7 @@ import torch
 
 import diffmp
 
-from .model import Model
+from . import Model
 
 
 def sample(

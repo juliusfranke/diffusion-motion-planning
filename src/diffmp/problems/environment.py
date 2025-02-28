@@ -1,27 +1,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from matplotlib.axes import Axes
+import matplotlib.pyplot as plt
 from typing import Any, Dict, List, Tuple, cast, Optional
 import numpy as np
+import geopandas as gpd
 from shapely import union_all, difference, intersection, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from .obstacle import Bounds2D, BoxObstacle, Obstacle, obstacle_from_dict
 
 
-def area_blocked(
-    min: Tuple[float, float], max: Tuple[float, float], obstacles: List[Obstacle]
-) -> float:
+def blocked_geometry(
+    env_min: Tuple[float, float],
+    env_max: Tuple[float, float],
+    obstacles: List[Obstacle],
+) -> BaseGeometry:
     geom_env = Polygon(
         (
-            (min[0], min[1]),
-            (max[0], min[1]),
-            (max[0], max[1]),
-            (min[0], max[1]),
+            (env_min[0], env_min[1]),
+            (env_max[0], env_min[1]),
+            (env_max[0], env_max[1]),
+            (env_min[0], env_max[1]),
         )
     )
     geom_obstacles = union_all([o.geometry() for o in obstacles])
     geom_obstacles_in_env = intersection(geom_obstacles, geom_env)
-    return geom_obstacles_in_env.area
+    return geom_obstacles_in_env
 
 
 @dataclass
@@ -29,22 +35,40 @@ class Environment:
     def __init__(
         self,
         obstacles: List[Obstacle],
-        min: Tuple[float, float],
-        max: Tuple[float, float],
+        env_min: Tuple[float, float],
+        env_max: Tuple[float, float],
     ):
         self.obstacles = obstacles
-        self.min = min
-        self.max = max
-        self.env_width = max[0] - min[0]
-        self.env_height = max[1] - min[1]
+        self.min = env_min
+        self.max = env_max
+        self.env_width = env_max[0] - env_min[0]
+        self.env_height = env_max[1] - env_min[1]
 
         self.area = self.env_width * self.env_height
 
-        self.area_blocked = area_blocked(self.min, self.max, self.obstacles)
+        self.area_blocked = blocked_geometry(self.min, self.max, self.obstacles).area
         self.area_free = self.area - self.area_blocked
 
         self.n_obstacles = len(self.obstacles)
         self.p_obstacles = self.area_blocked / self.area
+
+    def plot(self, ax: Optional[Axes] = None):
+        environment = Polygon(
+            (
+                (self.min[0], self.min[1]),
+                (self.max[0], self.min[1]),
+                (self.max[0], self.max[1]),
+                (self.min[0], self.max[1]),
+            )
+        )
+        obstacles = gpd.GeoSeries(blocked_geometry(self.min, self.max, self.obstacles))
+        if ax is None:
+            fig, ax = plt.subplots(1)
+        assert isinstance(ax, Axes)
+        # environment.plot(ax=ax)
+        x, y = environment.exterior.xy
+        ax.plot(x, y, color="black")
+        obstacles.plot(ax=ax, color="black")
 
     def to_dict(self) -> Dict:
         return {
@@ -88,7 +112,7 @@ class Environment:
             if isinstance(obstacle, dict)
         ]
 
-        return cls(obstacles=obstacles, min=min, max=max)
+        return cls(obstacles=obstacles, env_min=min, env_max=max)
 
     @classmethod
     def random(
@@ -116,8 +140,8 @@ class Environment:
                 bounds_environment=bounds_environment, max_area=obstacle_max_area
             )
             obstacles.append(obstacle)
-            area_b = area_blocked((0, 0), (x_max, y_max), obstacles)
+            area_b = blocked_geometry((0, 0), (x_max, y_max), obstacles).area
             if area_b > blocked_goal or np.isclose(area_b, blocked_goal, atol=0.1):
                 break
             obstacle_max_area = min(blocked_goal - area_b, obstacle_max_area)
-        return cls(obstacles=obstacles, min=(0, 0), max=(x_max, y_max))
+        return cls(obstacles=obstacles, env_min=(0, 0), env_max=(x_max, y_max))
