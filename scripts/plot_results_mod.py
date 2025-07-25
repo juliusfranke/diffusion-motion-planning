@@ -1,16 +1,19 @@
 from functools import partial
+from matplotlib.axes import Axes
 import pyperclip
 import seaborn as sns
+from typing import List
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.ticker import Locator
+import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 import sys
 from pathlib import Path
 
 
-sns.set_context("paper", font_scale=2.5, rc={"figure.figsize": [8, 6]})
+sns.set_context("paper", font_scale=2.5, rc={"figure.figsize": [18, 6]})
 plt.rcParams.update(
     {
         "text.usetex": True,
@@ -18,22 +21,20 @@ plt.rcParams.update(
         "font.family": "STIXGeneral",
         # "mathtext.fontset":"stix",
         # "font.size": 60,
-        "text.latex.preamble": r"\usepackage{amsfonts}",
-        "figure.figsize": [8, 5],
+        "text.latex.preamble": r"\usepackage{amsmath}\usepackage{amsfonts}",
+        "figure.figsize": [18, 6],
     }
 )
 
 
-def log_floor(x, precision=0.0) -> float:
-    return np.true_divide(np.floor(x * 10**precision), 10**precision)
+def plot_results(benchmark: pd.DataFrame, ax: List[Axes]):
+    def log_floor(x, precision=0.0) -> float:
+        return np.true_divide(np.floor(x * 10**precision), 10**precision)
 
+    def apply_df(model_value, instance, baseline):
+        baseline_value = baseline.loc[instance]
+        return (model_value - baseline_value) / baseline_value
 
-def apply_df(model_value, instance, baseline):
-    baseline_value = baseline.loc[instance]
-    return (model_value - baseline_value) / baseline_value
-
-
-def plot_results(benchmark: pd.DataFrame):
     baseline = benchmark[benchmark.name == "original"]
     bl_median = baseline.groupby("instance").median(numeric_only=True)
     bl_mean = baseline.groupby("instance").mean(numeric_only=True)
@@ -125,7 +126,7 @@ def plot_results(benchmark: pd.DataFrame):
     print(result.round(decimals=4))
     if len(sys.argv) == 2:
         return 0
-    fig, ax = plt.subplots(1, 3, sharey=True)
+    # fig, ax = plt.subplots(1, 3, sharey=True)
     # sns.barplot(benchmark, y="success", hue="name", ax=ax[0])
     order = ["Baseline", "Model"]
     benchmark["name"] = benchmark.apply(
@@ -157,58 +158,79 @@ def plot_results(benchmark: pd.DataFrame):
     i.get_legend().remove()
     for i in range(3):
         lintresh = min(thresh)
-        ax[i].set_yscale("symlog", linthresh=lintresh)
+        # ax[i].set_yscale("symlog", linthresh=lintresh)
         ax[i].axhline(y=0, color="red", linestyle="--")
         ax[i].set_xticks(ax[i].get_xticks(), ax[i].get_xticklabels())
-        ax[i].yaxis.set_major_locator(
-            mticker.SymmetricalLogLocator(base=10, linthresh=lintresh)
-        )
-        ax[i].yaxis.set_minor_locator(
-            mticker.SymmetricalLogLocator(
-                base=10, linthresh=lintresh, subs=[x / 10 for x in range(1, 10)]
-            )
-        )
+        # ax[i].yaxis.set_major_locator(
+        #     mticker.SymmetricalLogLocator(base=10, linthresh=lintresh)
+        # )
+        # ax[i].yaxis.set_minor_locator(
+        #     mticker.SymmetricalLogLocator(
+        #         base=10, linthresh=lintresh, subs=[x / 10 for x in range(1, 10)]
+        #     )
+        # )
         ax[i].grid(axis="y")
-        ax[i].set_xticks(
-            ax[i].get_xticks(), ax[i].get_xticklabels(), rotation=90, ha="right"
-        )
-    fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False)
+        # ax[i].set_xticks(
+        #     ax[i].get_xticks(), ax[i].get_xticklabels(), rotation=90, ha="right"
+        # )
+    # fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False)
+
     # .legend(frameon=False)
     # legend = plt.legend()
     # legend.get_frame().set_facecolor("none")
-    plt.tight_layout()
-    plt.subplots_adjust(bottom=0.2)
-    plt.savefig(sys.argv[2])
+    # plt.savefig(sys.argv[2])
     # plt.show()
 
 
 def main():
-    dynamics = sys.argv[1]
-    assert dynamics in ["unicycle1_v0", "unicycle2_v0", "car1_v0"]
-    results_path = Path(f"data/results/{dynamics}/")
-    benchmarks = list(results_path.glob("*.parquet"))
-    chosen = 0
-    if len(benchmarks) > 0:
-        for idx, name in enumerate(benchmarks):
-            print(f"{idx}: {name.stem}")
-        chosen = int(input("Index?: "))
-    chosen_bench = benchmarks[chosen]
+    # dynamics = sys.argv[1]
+    paths = [
+        Path(f"data/results/unicycle1_v0/unicycle1_v0.parquet"),
+        Path(f"data/results/unicycle2_v0/unicycle2_v0.parquet"),
+        Path(f"data/results/car1_v0/car1_v0.parquet"),
+    ]
 
-    benchmark = pd.read_parquet(chosen_bench)
-    if "delta_0" in benchmark.columns and len(benchmark.delta_0.unique()) > 1:
-        for delta_0 in benchmark.delta_0.unique():
-            this_df = benchmark[benchmark.delta_0 == delta_0].reset_index(drop=True)
-            print(delta_0)
-            plot_results(this_df)
-        return 0
-    if "n_mp" in benchmark.columns and len(benchmark.n_mp.unique()) > 1:
-        for n_mp in sorted(benchmark.n_mp.unique()):
-            this_df = benchmark[benchmark.n_mp == n_mp].reset_index(drop=True)
-            print(n_mp)
-            plot_results(this_df)
-        return 0
-    # benchmark.sample()
-    plot_results(benchmark)
+    # fig, axes = plt.subplots(1, 9, sharey=True)
+    fig = plt.figure()
+    gs = gridspec.GridSpec(1, 11, width_ratios=[1, 1, 1, 0.3, 1, 1, 1, 0.3, 1, 1, 1])
+    axes = []
+    first_ax = None  # Keep track of the first subplot for sharing y-axis
+    for i in range(3):
+        for j in range(3):
+            ax = fig.add_subplot(gs[i * 4 + j], sharey=first_ax)  # Skip gap columns
+            if first_ax is None:
+                first_ax = ax  # First subplot retains the y-axis labels
+            else:
+                ax.label_outer()  # Hide redundant y-axis labels
+            axes.append(ax)
+    for i, path in enumerate(paths):
+        benchmark = pd.read_parquet(path)
+
+        plot_results(benchmark, axes[i * 3 : (i + 1) * 3])
+    for ax in axes:
+        ax.set_yscale("symlog", linthresh=1e-1)
+    handles, labels = axes[0].get_legend_handles_labels()
+    group_titles = [
+        "$1^{\\text{st}}$-order Unicycle",
+        "$2^{\\text{nd}}$-order Unicycle",
+        "Car with trailer",
+    ]
+    fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False)
+    left_margin = fig.subplotpars.left  # Default ~0.125
+    right_margin = fig.subplotpars.right  # Default ~0.9
+    total_width = right_margin - left_margin  # Effective width of the subplots
+    for i, title in enumerate(group_titles):
+        middle_ax = axes[i * 3 + 1]  # Middle subplot of each group
+        pos = middle_ax.get_position()  # Get subplot position
+        x_position = (pos.x0 + pos.x1) / 2  # Compute the center x-position
+        # x_position = left_margin + total_width * (
+        #     (i * 3 + 1.5) / 9
+        # )  # Adjust for margins
+        fig.text(x_position, 0.95, title, ha="center", fontsize=24, fontweight="bold")
+    # plt.tight_layout(rect=[0, 0, 1, 0.9])
+    plt.subplots_adjust(bottom=0.2, top=0.85)
+    fig.savefig("data/plots/combined_bench.eps")
+    # plt.show()
 
 
 if __name__ == "__main__":

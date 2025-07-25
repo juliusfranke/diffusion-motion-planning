@@ -1,0 +1,9 @@
+extends: default
+rules:
+  schema:
+    schemas:
+      - name: "config"
+        file: "./schemas/config.schema.json"
+        patterns:
+          - "config.yaml"
+          - "config.*.yaml"

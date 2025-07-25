@@ -21,16 +21,17 @@ import matplotlib.ticker as mticker
 import numpy as np
 
 
-TRIALS = 20
-TRIALS = 50
-TIMELIMIT_DB_ASTAR = 1000
-TIMELIMIT_DB_CBS = 1500
-# N_MPs = [100, 150, 200, 250]
-N_MPs = [100]
+TRIALS = 10
+# TRIALS = 50
+TIMELIMIT_DB_ASTAR = 2000
+TIMELIMIT_DB_CBS = 5000
+N_MPs = [100, 150, 200, 250]
+# N_MPs = [100]
 DELTA_0s = [0.5]
 # DELTA_0s = [0.9]
 # DELTA_0s = [0.3, 0.5, 0.7]
 # DELTA_0s = [0.7, 0.9, 1.1]
+# N_RANDOM = 50
 N_RANDOM = 10
 DATA = {
     # "delta_0": 0.5,
@@ -217,9 +218,9 @@ def benchmark_composite(
     #     DATA["delta_0"] = 0.9
     configurations_base = get_baseline_config(dynamics)
     instances = gen_instances(N_RANDOM, dynamics)
-    instances = [
-        diffmp.problems.Instance.from_yaml(Path("../example/parallelpark_1.yaml"))
-    ]
+    # instances = [
+    #     diffmp.problems.Instance.from_yaml(Path("../example/parallelpark_0.yaml"))
+    # ]
     tasks = []
     for instance in instances:
         for delta_0 in DELTA_0s:
@@ -228,7 +229,7 @@ def benchmark_composite(
 
                     tmp_path = tempfile.NamedTemporaryFile(suffix=".yaml", delete=False)
                     diffmp.utils.export_composite(
-                        composite_config, instance, Path(tmp_path.name), n_mp=N_MP
+                        composite_config, instance, Path(tmp_path.name), n_mp=N_MP * 5
                     )
                     temp = DATA | {
                         "mp_path": str(tmp_path.name),
@@ -295,11 +296,11 @@ def benchmark_composite(
         results["best_cost"].append(best_cost)
     result_df = pd.DataFrame(results)
 
-    breakpoint()
+    # breakpoint()
     print(result_df.groupby(["instance", "name"]).median(numeric_only=True))
     print(result_df.groupby(["instance", "name"]).mean(numeric_only=True))
-    plot_results(result_df.copy(deep=True))
     breakpoint()
+    # plot_results(result_df.copy(deep=True))
     date = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M")
     save_path = Path(f"data/results/{dynamics}/{date}.parquet")
     save_path.parent.mkdir(parents=True, exist_ok=True)
