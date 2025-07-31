@@ -1,15 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from matplotlib.axes import Axes
-import matplotlib.pyplot as plt
-from typing import Any, Dict, List, Tuple, cast, Optional
-import numpy as np
+from typing import Any, Dict, List, Optional, Tuple, cast
+
 import geopandas as gpd
-from shapely import union_all, difference, intersection, Polygon
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.axes import Axes
+from meshlib.mrmeshpy import (
+    AffineXf3f,
+    Matrix3f,
+    Mesh,
+    Vector3f,
+    boolean,
+    BooleanOperation,
+    makeCube,
+)
+from shapely import Polygon, difference, intersection, union_all
 from shapely.geometry.base import BaseGeometry
 
-from .obstacle import Bounds2D, BoxObstacle, Obstacle, obstacle_from_dict
+from .etc import Bounds, Dim
+from .obstacle import BoxObstacle, Obstacle, obstacle_from_dict
 
 
 def blocked_geometry(
@@ -30,27 +40,57 @@ def blocked_geometry(
     return geom_obstacles_in_env
 
 
-@dataclass
 class Environment:
+    dim: Dim
+    boundary_mesh: Mesh
+    blocked_mesh: Mesh
+
     def __init__(
         self,
-        obstacles: List[Obstacle],
-        env_min: Tuple[float, float],
-        env_max: Tuple[float, float],
+        obstacles: list[Obstacle],
+        env_min: Vector3f,
+        env_max: Vector3f,
     ):
+        assert env_min.x < env_max.x and env_min.y < env_max.y
+        assert env_min.z <= env_max.z
+
         self.obstacles = obstacles
         self.min = env_min
         self.max = env_max
-        self.env_width = env_max[0] - env_min[0]
-        self.env_height = env_max[1] - env_min[1]
+        self.size = env_max - env_min
+        self.boundary_mesh = makeCube(base=self.min)
+        if self.size.z == 0:
+            self.dim = Dim.TWO_D
+            transform = AffineXf3f.xfAround(
+                Matrix3f.scale(self.size.x, self.size.y, 1), stable=Vector3f(self.min)
+            )
 
-        self.area = self.env_width * self.env_height
+        else:
+            self.dim = Dim.THREE_D
+            transform = AffineXf3f.xfAround(
+                Matrix3f.scale(self.size), stable=Vector3f(self.min)
+            )
+        self.boundary_mesh.transform(transform)
 
-        self.area_blocked = blocked_geometry(self.min, self.max, self.obstacles).area
-        self.area_free = self.area - self.area_blocked
+        self.area = self.size.x * self.size.y
+        self.volume = self.area * self.size.z
+
+        self.update()
 
         self.n_obstacles = len(self.obstacles)
         self.p_obstacles = self.area_blocked / self.area
+
+    def update(self) -> None:
+        for obstacle in self.obstacles:
+            self.blocked_mesh = boolean(
+                obstacle.mesh, self.blocked_mesh, BooleanOperation.Union
+            ).mesh
+        self.blocked_mesh = boolean(
+            self.blocked_mesh, self.boundary_mesh, BooleanOperation.DifferenceAB
+        ).mesh
+
+        self.area_blocked = self.blocked_mesh.projArea(Vector3f(0, 0, 1)) / 2
+        self.volume_blocked = self.blocked_mesh.volume()
 
     def plot(self, ax: Optional[Axes] = None):
         environment = Polygon(

@@ -2,10 +2,10 @@ from .instance import Instance, Baseline
 from .environment import Environment
 from .obstacle import (
     BoxObstacle,
-    CylinderObstacle,
+    # CylinderObstacle,
     Obstacle,
-    obstacle_from_dict,
-    ObstacleType,
+    # obstacle_from_dict,
+    # ObstacleType,
 )
 from .robots import Robot
 
@@ -16,8 +16,8 @@ __all__ = [
     "Environment",
     "Robot",
     "BoxObstacle",
-    "CylinderObstacle",
+    # "CylinderObstacle",
     "Obstacle",
-    "ObstacleType",
-    "obstacle_from_dict",
+    # "ObstacleType",
+    # "obstacle_from_dict",
 ]

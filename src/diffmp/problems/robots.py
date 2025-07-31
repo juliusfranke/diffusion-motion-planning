@@ -1,19 +1,24 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Dict, List, Optional
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, List, Optional
+
+import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
-import matplotlib.pyplot as plt
+
 import diffmp
 from diffmp.problems.environment import Environment
+
+if TYPE_CHECKING:
+    from diffmp.dynamics import DynamicsBase
 
 
 @dataclass
 class Robot:
     start: List[float]
     goal: List[float]
-    dynamics: str
+    dynamics: DynamicsBase
 
     def plot(self, ax: Optional[Axes] = None) -> None:
         if ax is None:
@@ -47,7 +52,7 @@ class Robot:
         assert isinstance(data["type"], str)
         start = data["start"]
         goal = data["goal"]
-        dynamics = data["type"]
+        dynamics = diffmp.dynamics.get_dynamics(data["type"], 1)
         return cls(start=start, goal=goal, dynamics=dynamics)
 
     @classmethod
