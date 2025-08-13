@@ -20,7 +20,11 @@ class Obstacle(ABC):
     dim: Dim
 
     def area(self) -> float:
-        return self.mesh.area()
+        return (
+            self.mesh.area()
+            if self.dim == Dim.THREE_D
+            else self.mesh.projArea(Vector3f(0, 0, 1) / 2)
+        )
 
     def volume(self) -> float:
         return self.mesh.volume()
@@ -50,10 +54,12 @@ class BoxObstacle(Obstacle):
         self.size = size
 
         self.mesh = makeCube()
-        transformation = AffineXf3f.xfAround(
+        scaling = AffineXf3f.xfAround(
             Matrix3f.scale(self.size), stable=Vector3f(0, 0, 0)
-        ).translation(self.center)
-        self.mesh.transform(transformation)
+        )
+        translation = AffineXf3f.translation(self.center)
+        self.mesh.transform(scaling)
+        self.mesh.transform(translation)
 
     def to_dict(self):
         center = list(self.center)
@@ -65,7 +71,7 @@ class BoxObstacle(Obstacle):
         return {"type": "Box", "center": center, "size": size}
 
     @classmethod
-    def random(cls, center_bounds: Bounds, size_bounds: Bounds) -> Box:
+    def random(cls, center_bounds: Bounds, size_bounds: Bounds) -> BoxObstacle:
         center = center_bounds.random_point()
         size = size_bounds.random_point()
         return cls(center=center, size=size)

@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import yaml
 
 import diffmp
-from diffmp.problems.obstacle import Bounds2D
 
 from .environment import Environment
 from .robots import Robot

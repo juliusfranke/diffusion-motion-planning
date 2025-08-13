@@ -6,6 +6,8 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
+from shapely.geometry import Polygon
+from matplotlib.collections import PatchCollection
 from meshlib.mrmeshpy import (
     AffineXf3f,
     Matrix3f,
@@ -15,29 +17,13 @@ from meshlib.mrmeshpy import (
     BooleanOperation,
     makeCube,
 )
-from shapely import Polygon, difference, intersection, union_all
+
+# from shapely import Polygon, difference, intersection, union_all
+import random
 from shapely.geometry.base import BaseGeometry
 
-from .etc import Bounds, Dim
-from .obstacle import BoxObstacle, Obstacle, obstacle_from_dict
-
-
-def blocked_geometry(
-    env_min: Tuple[float, float],
-    env_max: Tuple[float, float],
-    obstacles: List[Obstacle],
-) -> BaseGeometry:
-    geom_env = Polygon(
-        (
-            (env_min[0], env_min[1]),
-            (env_max[0], env_min[1]),
-            (env_max[0], env_max[1]),
-            (env_min[0], env_max[1]),
-        )
-    )
-    geom_obstacles = union_all([o.geometry() for o in obstacles])
-    geom_obstacles_in_env = intersection(geom_obstacles, geom_env)
-    return geom_obstacles_in_env
+from .etc import Bounds, Dim, plot_3dmesh_to_2d, set_axes_equal, plot_3dmesh
+from .obstacle import BoxObstacle, Obstacle
 
 
 class Environment:
@@ -77,38 +63,101 @@ class Environment:
 
         self.update()
 
-        self.n_obstacles = len(self.obstacles)
-        self.p_obstacles = self.area_blocked / self.area
-
     def update(self) -> None:
+        self.blocked_mesh = Mesh()
         for obstacle in self.obstacles:
             self.blocked_mesh = boolean(
                 obstacle.mesh, self.blocked_mesh, BooleanOperation.Union
             ).mesh
         self.blocked_mesh = boolean(
-            self.blocked_mesh, self.boundary_mesh, BooleanOperation.DifferenceAB
+            self.blocked_mesh, self.boundary_mesh, BooleanOperation.Intersection
         ).mesh
+        # self.blocked_mesh = self.
 
-        self.area_blocked = self.blocked_mesh.projArea(Vector3f(0, 0, 1)) / 2
+        self.area_blocked = self.blocked_mesh.projArea(Vector3f(0, 0, 1))
         self.volume_blocked = self.blocked_mesh.volume()
+        self.n_obstacles = len(self.obstacles)
+        if self.dim == Dim.TWO_D:
+            self.p_obstacles = self.area_blocked / self.area
+        elif self.dim == Dim.THREE_D:
+            self.p_obstacles = self.volume_blocked / self.volume
+        print(f"{self.p_obstacles=}")
 
-    def plot(self, ax: Optional[Axes] = None):
+    def add_obstacle(self, obstacle: Obstacle) -> None:
+        self.obstacles.append(obstacle)
+        self.update()
+
+    def __plot2d(self, ax: Axes):
         environment = Polygon(
             (
-                (self.min[0], self.min[1]),
-                (self.max[0], self.min[1]),
-                (self.max[0], self.max[1]),
-                (self.min[0], self.max[1]),
+                (self.min.x, self.min.y),
+                (self.max.x, self.min.y),
+                (self.max.x, self.max.y),
+                (self.min.x, self.max.y),
             )
         )
-        obstacles = gpd.GeoSeries(blocked_geometry(self.min, self.max, self.obstacles))
+        xs, ys = environment.exterior.xy
+        ax.fill(xs, ys, facecolor="white", edgecolor="black", alpha=1)
+        plot_3dmesh_to_2d(self.blocked_mesh, ax=ax)
+
+    def __plot3d(self, ax: Axes):
+
+        x0, y0, z0 = self.min
+        x1, y1, z1 = self.max
+        corners = np.array(
+            [
+                [x0, y0, z0],
+                [x1, y0, z0],
+                [x1, y1, z0],
+                [x0, y1, z0],
+                [x0, y0, z1],
+                [x1, y0, z1],
+                [x1, y1, z1],
+                [x0, y1, z1],
+            ]
+        )
+        edges = [
+            [0, 1],
+            [1, 2],
+            [2, 3],
+            [3, 0],
+            [4, 5],
+            [5, 6],
+            [6, 7],
+            [7, 4],
+            [0, 4],
+            [1, 5],
+            [2, 6],
+            [3, 7],
+        ]
+        for start, end in edges:
+            xs, ys, zs = zip(corners[start], corners[end])
+            ax.plot(xs, ys, zs, color="black")
+        plot_3dmesh(self.blocked_mesh, ax)
+
+    def plot(self, ax: Optional[Axes] = None):
         if ax is None:
-            fig, ax = plt.subplots(1)
-        assert isinstance(ax, Axes)
-        # environment.plot(ax=ax)
-        x, y = environment.exterior.xy
-        ax.plot(x, y, color="black")
-        obstacles.plot(ax=ax, color="black")
+            if self.dim == Dim.TWO_D:
+                fig, ax = plt.subplots(1)
+            elif self.dim == Dim.THREE_D:
+                fig = plt.figure()
+                ax = fig.add_subplot(111, projection="3d")
+        match self.dim:
+            case Dim.TWO_D:
+                if ax is None:
+                    fig, ax = plt.subplots(1)
+                self.__plot2d(ax)
+                ax.autoscale()
+                ax.set_aspect("equal")
+            case Dim.THREE_D:
+                if ax is None:
+                    fig = plt.figure()
+                    ax = fig.add_subplot(111, projection="3d")
+                self.__plot3d(ax)
+                ax.set_box_aspect([1.0, 1.0, 1.0])
+                set_axes_equal(ax)
+
+        plt.show()
 
     def to_dict(self) -> Dict:
         return {
@@ -156,32 +205,61 @@ class Environment:
 
     @classmethod
     def random(
-        cls,
-        min_size: int,
-        max_size: int,
-        n_obstacles_min: int,
-        p_obstacles: float,
+        cls, min_size: int, max_size: int, p_obstacles: float, dim: Dim = Dim.TWO_D
     ) -> Environment:
         assert 0 <= p_obstacles <= 1
-        x_max = int(np.random.random() * (max_size - min_size) + min_size)
-        y_max = int(np.random.random() * (max_size - min_size) + min_size)
-        bounds_environment = Bounds2D(0, x_max, 0, y_max)
-        env_area = x_max * y_max
-        obstacle_max_area = env_area / n_obstacles_min
-        blocked_goal = env_area * p_obstacles
-        obstacles = []
-        count = 0
-        max_tries = n_obstacles_min * 10
-        while True:
-            if count >= max_tries:
-                return cls.random(min_size, max_size, n_obstacles_min, p_obstacles)
-            count += 1
-            obstacle = BoxObstacle.random(
-                bounds_environment=bounds_environment, max_area=obstacle_max_area
+        env_min = Vector3f(0, 0, 0)
+        env_max = Vector3f(0, 0, 0)
+        env_max.x = int(np.random.random() * (max_size - min_size) + min_size)
+        env_max.y = int(np.random.random() * (max_size - min_size) + min_size)
+        if dim == Dim.THREE_D:
+            env_max.z = int(np.random.random() * (max_size - min_size) + min_size)
+
+        env_bounds = Bounds(env_min, env_max)
+        env = cls(obstacles=[], env_min=env_min, env_max=env_max)
+        ob_small_side = 0.2
+        ob_min = env_max / 10
+        ob_med = env_max / 5
+        ob_max = env_max / 2
+        if dim == Dim.TWO_D:
+            orient_x = Bounds(
+                min=Vector3f(ob_min.x, ob_small_side, 0),
+                max=Vector3f(ob_max.x, ob_small_side, 0),
             )
-            obstacles.append(obstacle)
-            area_b = blocked_geometry((0, 0), (x_max, y_max), obstacles).area
-            if area_b > blocked_goal or np.isclose(area_b, blocked_goal, atol=0.1):
-                break
-            obstacle_max_area = min(blocked_goal - area_b, obstacle_max_area)
-        return cls(obstacles=obstacles, env_min=(0, 0), env_max=(x_max, y_max))
+            orient_y = Bounds(
+                min=Vector3f(ob_small_side, ob_min.y, 0),
+                max=Vector3f(ob_small_side, ob_max.y, 0),
+            )
+            no_orient = Bounds(
+                min=Vector3f(ob_min.x, ob_min.y, 0),
+                max=Vector3f(ob_med.x, ob_med.y, 0),
+            )
+            ob_bounds = [orient_x, orient_y, no_orient]
+        elif dim == Dim.THREE_D:
+            ob_small_side = 1
+            ob_med = env_max / 7
+            orient_xy = Bounds(
+                min=Vector3f(ob_min.x, ob_small_side, ob_min.z),
+                max=Vector3f(ob_max.x, ob_small_side, ob_max.z),
+            )
+            orient_yz = Bounds(
+                min=Vector3f(ob_small_side, ob_min.y, ob_min.z),
+                max=Vector3f(ob_small_side, ob_max.y, ob_max.z),
+            )
+            orient_xz = Bounds(
+                min=Vector3f(ob_min.x, ob_small_side, ob_min.z),
+                max=Vector3f(ob_max.x, ob_small_side, ob_max.z),
+            )
+            no_orient = Bounds(
+                min=ob_min,
+                max=ob_med,
+            )
+            ob_bounds = [orient_xy, orient_yz, orient_xz, no_orient]
+
+        while env.p_obstacles < p_obstacles:
+            size_bounds = random.choice(ob_bounds)
+            obstacle = BoxObstacle.random(
+                center_bounds=env_bounds, size_bounds=size_bounds
+            )
+            env.add_obstacle(obstacle)
+        return env
