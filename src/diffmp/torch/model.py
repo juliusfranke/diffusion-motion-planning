@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TYPE_CHECKING
+from typing import Any, NamedTuple, Optional, TYPE_CHECKING
 
 import torch
 from torch import Tensor, float64, save
@@ -21,9 +21,9 @@ from .schedules import NoiseSchedule
 @dataclass
 class CompositeConfig:
     dynamics: str
-    models: List[Model]
+    models: list[Model]
     optuna: Optional[OptunaReporter] = None
-    allocation: Optional[Dict[int, int]] = None
+    allocation: Optional[dict[int, int]] = None
 
     @classmethod
     def from_yaml(cls, path: Path, load_if_exists: bool = True) -> CompositeConfig:
@@ -31,9 +31,9 @@ class CompositeConfig:
         return cls.from_dict(data, load_if_exists)
 
     @classmethod
-    def from_dict(cls, data: Dict, load_if_exists: bool = True) -> CompositeConfig:
+    def from_dict(cls, data: dict, load_if_exists: bool = True) -> CompositeConfig:
         dynamics = diffmp.dynamics.get_dynamics(data["dynamics"], 1).name
-        models: List[Model] = []
+        models: list[Model] = []
         models_path = Path("data/models")
         for model_name in data["models"]:
             config_path = models_path / (model_name + ".yaml")
@@ -61,8 +61,8 @@ class Config(NamedTuple):
     problem: str
     n_hidden: int
     s_hidden: int
-    regular: List[diffmp.utils.DatasetParameter | diffmp.utils.CalculatedParameter]
-    conditioning: List[diffmp.utils.DatasetParameter | diffmp.utils.CalculatedParameter]
+    regular: list[diffmp.utils.DatasetParameter | diffmp.utils.CalculatedParameter]
+    conditioning: list[diffmp.utils.DatasetParameter | diffmp.utils.CalculatedParameter]
     loss_fn: diffmp.torch.Loss
     dataset: Path
     denoising_steps: int
@@ -70,13 +70,13 @@ class Config(NamedTuple):
     lr: float
     noise_schedule: NoiseSchedule
     dataset_size: int
-    reporters: List[diffmp.utils.Reporter]
-    test_instances: List[diffmp.problems.Instance]
-    weights: Dict[str, Dict[str, float]]
+    reporters: list[diffmp.utils.Reporter]
+    test_instances: list[diffmp.problems.Instance]
+    weights: dict[str, dict[str, float]]
     optimizer: Any = torch.optim.Adam
     validation_split: float = 0.8
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         config = {
             "dynamics": self.dynamics.name,
             "timesteps": self.timesteps,
@@ -108,7 +108,7 @@ class Config(NamedTuple):
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: Dict, name: Optional[str] = None) -> Config:
+    def from_dict(cls, data: dict, name: Optional[str] = None) -> Config:
         required = []
         data["test_instances"] = [
             diffmp.problems.Instance.from_yaml(p)
@@ -191,7 +191,7 @@ class Model(Module):
 
         self.path: Path | None = None
 
-        layers: List[Linear] = [Linear(self.in_size, self.s_hidden, dtype=float64)]
+        layers: list[Linear] = [Linear(self.in_size, self.s_hidden, dtype=float64)]
 
         for _ in range(self.n_hidden):
             layers.append(Linear(self.s_hidden, self.s_hidden, dtype=float64))
@@ -214,7 +214,7 @@ class Model(Module):
             raise Exception("Model path was not set")
 
     @classmethod
-    def load(cls, path: Path) -> Model:
+    def load(cls, path: path) -> Model:
         config_path = path.parent / (path.name + ".yaml")
         weights_path = path.parent / (path.name + ".pt")
         config = Config.from_yaml(config_path)

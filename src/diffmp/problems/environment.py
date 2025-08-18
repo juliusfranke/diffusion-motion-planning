@@ -1,34 +1,45 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, cast
+from copy import copy
+import random
+from typing import TYPE_CHECKING, Any, Optional, cast
 
-import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 from matplotlib.axes import Axes
-from shapely.geometry import Polygon
-from matplotlib.collections import PatchCollection
 from meshlib.mrmeshpy import (
     AffineXf3f,
+    BooleanOperation,
     Matrix3f,
     Mesh,
+    MeshPart,
     Vector3f,
     boolean,
-    BooleanOperation,
+    findSignedDistance,
     makeCube,
 )
+from shapely.geometry import Polygon
 
-# from shapely import Polygon, difference, intersection, union_all
-import random
-from shapely.geometry.base import BaseGeometry
+from diffmp.utils import mult_el_wise
 
-from .etc import Bounds, Dim, plot_3dmesh_to_2d, set_axes_equal, plot_3dmesh
+from .etc import (
+    Bounds,
+    Dim,
+    plot_3dmesh,
+    plot_3dmesh_to_2d,
+    set_axes_equal,
+    meshes_collide,
+)
 from .obstacle import BoxObstacle, Obstacle
+
+if TYPE_CHECKING:
+    from diffmp.dynamics.base import DynamicsBase
 
 
 class Environment:
     dim: Dim
-    boundary_mesh: Mesh
+    area_mesh: Mesh
     blocked_mesh: Mesh
 
     def __init__(
@@ -44,19 +55,49 @@ class Environment:
         self.min = env_min
         self.max = env_max
         self.size = env_max - env_min
-        self.boundary_mesh = makeCube(base=self.min)
+
+        max_size = max(self.size)
+        boundary_border_size = (
+            self.size - Vector3f(1, 1, 1) * max_size
+        ) / 2 - Vector3f(1, 1, 1)
+        boundary_size = self.size - 3 * boundary_border_size
+        # breakpoint()
         if self.size.z == 0:
             self.dim = Dim.TWO_D
-            transform = AffineXf3f.xfAround(
+            self.min.z = -0.5
+            self.max.z = 0.5
+            boundary_size.z = 0.98
+            boundary_border_size.z = 0
+            xf_area = AffineXf3f.xfAround(
                 Matrix3f.scale(self.size.x, self.size.y, 1), stable=Vector3f(self.min)
+            )
+            xf_boundary = AffineXf3f.xfAround(
+                Matrix3f.scale(boundary_size),
+                stable=Vector3f(self.min + boundary_border_size),
             )
 
         else:
             self.dim = Dim.THREE_D
-            transform = AffineXf3f.xfAround(
+            xf_area = AffineXf3f.xfAround(
                 Matrix3f.scale(self.size), stable=Vector3f(self.min)
             )
-        self.boundary_mesh.transform(transform)
+            xf_boundary = AffineXf3f.xfAround(
+                Matrix3f.scale(boundary_size),
+                stable=Vector3f(self.min + boundary_border_size),
+            )
+        self.area_mesh = makeCube(base=self.min)
+        self.area_mesh.transform(xf_area)
+        self.area_aabb = self.area_mesh.getBoundingBox()
+
+        b_mesh = makeCube(base=self.min + boundary_border_size)
+        b_mesh.transform(xf_boundary)
+        self.boundary_mesh = boolean(
+            b_mesh, self.area_mesh, BooleanOperation.DifferenceAB
+        ).mesh
+        # print(f"{self.size=}")
+        # print(f"{b_mesh.volume()=}")
+        # print(f"{self.area_mesh.volume()=}")
+        # print(f"{self.boundary_mesh.volume()=}")
 
         self.area = self.size.x * self.size.y
         self.volume = self.area * self.size.z
@@ -70,9 +111,8 @@ class Environment:
                 obstacle.mesh, self.blocked_mesh, BooleanOperation.Union
             ).mesh
         self.blocked_mesh = boolean(
-            self.blocked_mesh, self.boundary_mesh, BooleanOperation.Intersection
+            self.blocked_mesh, self.area_mesh, BooleanOperation.Intersection
         ).mesh
-        # self.blocked_mesh = self.
 
         self.area_blocked = self.blocked_mesh.projArea(Vector3f(0, 0, 1))
         self.volume_blocked = self.blocked_mesh.volume()
@@ -81,13 +121,12 @@ class Environment:
             self.p_obstacles = self.area_blocked / self.area
         elif self.dim == Dim.THREE_D:
             self.p_obstacles = self.volume_blocked / self.volume
-        print(f"{self.p_obstacles=}")
 
     def add_obstacle(self, obstacle: Obstacle) -> None:
         self.obstacles.append(obstacle)
         self.update()
 
-    def __plot2d(self, ax: Axes):
+    def plot2d(self, ax: Axes):
         environment = Polygon(
             (
                 (self.min.x, self.min.y),
@@ -100,8 +139,7 @@ class Environment:
         ax.fill(xs, ys, facecolor="white", edgecolor="black", alpha=1)
         plot_3dmesh_to_2d(self.blocked_mesh, ax=ax)
 
-    def __plot3d(self, ax: Axes):
-
+    def plot3d(self, ax: Axes):
         x0, y0, z0 = self.min
         x1, y1, z1 = self.max
         corners = np.array(
@@ -136,62 +174,99 @@ class Environment:
         plot_3dmesh(self.blocked_mesh, ax)
 
     def plot(self, ax: Optional[Axes] = None):
-        if ax is None:
-            if self.dim == Dim.TWO_D:
-                fig, ax = plt.subplots(1)
-            elif self.dim == Dim.THREE_D:
-                fig = plt.figure()
-                ax = fig.add_subplot(111, projection="3d")
         match self.dim:
             case Dim.TWO_D:
                 if ax is None:
                     fig, ax = plt.subplots(1)
-                self.__plot2d(ax)
+                self.plot2d(ax)
                 ax.autoscale()
                 ax.set_aspect("equal")
             case Dim.THREE_D:
                 if ax is None:
                     fig = plt.figure()
                     ax = fig.add_subplot(111, projection="3d")
-                self.__plot3d(ax)
+                self.plot3d(ax)
                 ax.set_box_aspect([1.0, 1.0, 1.0])
                 set_axes_equal(ax)
 
-        plt.show()
-
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
+        min, max = list(self.min), list(self.max)
+        if self.dim == Dim.TWO_D:
+            min = min[:2]
+            max = max[:2]
         return {
-            "min": list(self.min),
-            "max": list(self.max),
+            "min": min,
+            "max": max,
             "obstacles": [o.to_dict() for o in self.obstacles],
         }
 
-    def random_free(self, clearance: float = 0.0) -> Optional[Tuple[float, float]]:
-        max_tries = 1000
-        for _ in range(max_tries):
-            x = np.random.random() * (self.max[0] - self.min[0]) + self.min[0]
-            y = np.random.random() * (self.max[1] - self.min[1]) + self.min[1]
-            is_free = True
-            for obstacle in self.obstacles:
-                if obstacle.is_inside(x=x, y=y, clearance=clearance):
-                    is_free = False
-                    break
-            if not is_free:
-                continue
-            break
-        else:
-            return None
+    def discretize_sd(self, n: int) -> npt.NDArray[np.floating]:
+        Nx, Ny, Nz = n, n, n
+        s_max = max(self.size)
+        xs = np.linspace(self.min.x, s_max, n)
+        ys = np.linspace(self.min.y, s_max, n)
+        zs = np.linspace(self.min.z, s_max, n)
+        # breakpoint()
+        if self.dim == Dim.TWO_D:
+            zs = np.array([0])
+            Nz = 1
 
-        return (x, y)
+        X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+
+        blocked = boolean(
+            self.blocked_mesh, self.boundary_mesh, BooleanOperation.Union
+        ).mesh
+        mp = MeshPart(blocked)
+        sdf = np.empty((Nx, Ny, Nz), dtype=np.float32)
+
+        for i in range(Nx):
+            for j in range(Ny):
+                for k in range(Nz):
+                    pt = Vector3f(
+                        float(X[i, j, k]), float(Y[i, j, k]), float(Z[i, j, k])
+                    )
+                    sd = findSignedDistance(pt, mp)
+                    val = None
+                    if hasattr(sd, "signedDist"):
+                        val = float(sd.signedDist)  # pyright:ignore
+                    elif hasattr(sd, "dist"):
+                        val = float(sd.dist) * (-1 if getattr(sd, "sign", 1) < 0 else 1)
+                    else:
+                        raise RuntimeError(
+                            "Unexpected SignedDistanceToMeshResult fields"
+                        )
+                    sdf[i, j, k] = val
+
+        return sdf
+
+    def discretize_percent(self, n: int) -> npt.NDArray[np.floating]:
+        return np.array([])
+
+    def random_free(
+        self, robot_dynamics: DynamicsBase, max_tries: int = 1000
+    ) -> Optional[list[float]]:
+        for _ in range(max_tries):
+            px, py, pz = np.random.random(size=3)
+            pos = mult_el_wise(Vector3f(px, py, pz), self.max - self.min) + self.min
+
+            start = robot_dynamics.random_state(x=pos.x, y=pos.y, z=pos.z)
+            xf = robot_dynamics.tf_from_state(np.array(start))
+            robot_aabb = robot_dynamics.mesh.computeBoundingBox(xf)
+            in_env = self.area_aabb.contains(robot_aabb)
+            if not in_env:
+                continue
+            if not meshes_collide(self.blocked_mesh, robot_dynamics.mesh, xf):
+                return start
+        return None
 
     @classmethod
     def from_dict(
-        cls, data: Dict[str, List[float] | List[int | Dict[str, Any]]]
+        cls, data: dict[str, list[float] | list[int | dict[str, Any]]]
     ) -> Environment:
         assert isinstance(data["min"], list) and len(data["min"]) == 2
         assert isinstance(data["max"], list) and len(data["max"]) == 2
-        min = cast(Tuple[float, float], data["min"])
-        max = cast(Tuple[float, float], data["max"])
+        min = cast(tuple[float, float], data["min"])
+        max = cast(tuple[float, float], data["max"])
 
         assert isinstance(data["obstacles"], list)
 
@@ -216,7 +291,8 @@ class Environment:
             env_max.z = int(np.random.random() * (max_size - min_size) + min_size)
 
         env_bounds = Bounds(env_min, env_max)
-        env = cls(obstacles=[], env_min=env_min, env_max=env_max)
+        print(f"{env_bounds.min=}")
+        env = cls(obstacles=[], env_min=Vector3f(env_min), env_max=Vector3f(env_max))
         ob_small_side = 0.2
         ob_min = env_max / 10
         ob_med = env_max / 5
@@ -256,6 +332,7 @@ class Environment:
             )
             ob_bounds = [orient_xy, orient_yz, orient_xz, no_orient]
 
+        print(f"{env_bounds.min=}")
         while env.p_obstacles < p_obstacles:
             size_bounds = random.choice(ob_bounds)
             obstacle = BoxObstacle.random(

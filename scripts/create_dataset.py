@@ -3,22 +3,19 @@ from collections import defaultdict
 import multiprocessing as mp
 import sys
 import random
-import tempfile
-from dataclasses import dataclass
-from functools import partial
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, List
 
 import dbcbs_py
+import h5py
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from tqdm import tqdm
+import yaml
 
 import diffmp
 
 
-def split_solution(task: diffmp.utils.Task, lengths: List[int]):
+def split_solution(task: diffmp.utils.Task, lengths: list[int]):
     dynamics = task.instance.robots[0].dynamics
     primitives = {
         length: {"actions": [], "states": [], "rel_l": [], "cost": [], "delta": []}
@@ -122,7 +119,7 @@ def split_solution(task: diffmp.utils.Task, lengths: List[int]):
     return dataframes
 
 
-def tasks_to_mp(tasks: List[diffmp.utils.Task], lengths: List[int]):
+def tasks_to_mp(tasks: list[diffmp.utils.Task], lengths: list[int]):
     dataframes = defaultdict(list)
     primitives = {}
     for task in tasks:
@@ -148,7 +145,7 @@ def tasks_to_mp(tasks: List[diffmp.utils.Task], lengths: List[int]):
     return primitives
 
 
-def instances_to_df(instances: List[diffmp.problems.Instance]):
+def instances_to_df(instances: list[diffmp.problems.Instance]):
     data = defaultdict(list)
     for instance in instances:
         data[("env", "name")].append(instance.name)
@@ -190,7 +187,7 @@ def main():
     lengths = [5, 10, 15, 20]
     dynamics = "unicycle1_v0"
     # dynamics = "unicycle2_v0"
-    dynamics = "car1_v0"
+    # dynamics = "car1_v0"
     # results = {length: {"actions": [], "states": [], "cost": []} for length in lengths}
     # arrays = {}
     data = {
@@ -213,12 +210,12 @@ def main():
     #     for _ in range(50)
     # ]
     # n_random = 500
-    n_random = 500
+    n_random = 10
     random_instances = []
     pbar_0 = tqdm(total=n_random)
     for _ in range(n_random):
         instance = diffmp.problems.Instance.random(
-            6, 8, random.randint(4, 6), random.random() * (0.4 - 0.1) + 0.1, [dynamics]
+            6, 8, random.random() * (0.4 - 0.1) + 0.1, [dynamics], dim=diffmp.problems.Dim.TWO_D
         )
         random_instances.append(instance)
         pbar_0.update()
@@ -262,14 +259,19 @@ def main():
     pbar.close()
     primitives = tasks_to_mp(solved_tasks, lengths)
 
-    instances_df = instances_to_df(instances)
+    # instances_df = instances_to_df(instances)
+    instances_yaml = [yaml.dump(instance.to_dict()) for instance in instances]
 
     for length, df in primitives.items():
-        dataset = df.merge(instances_df).drop(columns=("env", "name"))
-        # print(dataset.env.describe())
-        # print(dataset.misc.describe())
-        print(length, dataset.shape)
-        dataset.to_parquet(f"data/training_datasets/{dynamics}_l{length}.parquet")
+        filename = f"data/training_datasets/{dynamics}_l{length}.h5"
+        with h5py.File(filename, "w") as f:
+            f.create_dataset("scalars", data=df.to_numpy())
+            # pass
+        # dataset = df.merge(instances_df).drop(columns=("env", "name"))
+        # # print(dataset.env.describe())
+        # # print(dataset.misc.describe())
+        # print(length, dataset.shape)
+        # dataset.to_parquet(f"data/training_datasets/{dynamics}_l{length}.parquet")
 
 
 if __name__ == "__main__":

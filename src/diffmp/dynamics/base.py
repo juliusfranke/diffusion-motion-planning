@@ -1,23 +1,34 @@
 from abc import ABC, abstractmethod
-import pandas as pd
-import diffmp
 from typing import Dict, List, Optional
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
+from meshlib.mrmeshpy import (
+    AffineXf3f,
+    Matrix3f,
+    Mesh,
+    Vector2f,
+    Vector3f,
+    makeCube,
+    makePlane,
+)
+
+import diffmp
 
 
 class DynamicsBase(ABC):
     def __init__(
         self,
         dt: float,
-        q: List[str],
-        u: List[str],
+        q: list[str],
+        u: list[str],
         parameter_set: diffmp.utils.ParameterSet,
         timesteps: int,
         name: str,
-        q_lims: Optional[Dict[str, Dict[str, float]]] = None,
-        u_lims: Optional[Dict[str, Dict[str, float]]] = None,
+        mesh: Mesh,
+        q_lims: Optional[dict[str, dict[str, float]]] = None,
+        u_lims: Optional[dict[str, dict[str, float]]] = None,
     ) -> None:
         self.dt = dt
         self.q = q
@@ -31,6 +42,7 @@ class DynamicsBase(ABC):
         self.parameter_set = parameter_set
         self.timesteps = timesteps
         self.name = name
+        self.mesh = mesh
 
     def random_state(self, **kwargs) -> List[float]:
         state = np.zeros(self.q_dim)
@@ -88,7 +100,9 @@ class DynamicsBase(ABC):
                 )
         assert (self._q_lims["min"] <= q_new).all() and (
             (q_new <= self._q_lims["max"]).all()
-        ).all(), f"q is not within bounds {q_new[:,2], np.max(q_new[:,2]), np.min(q_new[:,2]), q_new.shape, self._q_lims}"
+        ).all(), (
+            f"q is not within bounds {q_new[:, 2], np.max(q_new[:, 2]), np.min(q_new[:, 2]), q_new.shape, self._q_lims}"
+        )
         return q_new
 
     def prepare_out(self, data: npt.NDArray) -> pd.DataFrame:
@@ -102,6 +116,9 @@ class DynamicsBase(ABC):
                 continue
             df = param.fr(df)
         return df
+
+    @abstractmethod
+    def tf_from_state(self, state: npt.NDArray[np.floating]) -> AffineXf3f: ...
 
     @abstractmethod
     def to_mp(self, data: npt.NDArray) -> Dict: ...

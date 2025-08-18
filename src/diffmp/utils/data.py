@@ -1,8 +1,9 @@
+from __future__ import annotations
 import ast
 import numpy as np
 import numpy.typing as npt
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -13,8 +14,11 @@ import diffmp
 
 from .config import ParameterSet
 
+if TYPE_CHECKING:
+    from diffmp.torch import Config
 
-def load_yaml(path: Path) -> Dict[Any, Any]:
+
+def load_yaml(path: Path) -> dict[Any, Any]:
     if not path.exists():
         raise FileNotFoundError()
     if path.is_dir():
@@ -27,21 +31,19 @@ def load_yaml(path: Path) -> Dict[Any, Any]:
 
 def param_to_col(
     parameter_set: ParameterSet,
-    available_columns: List[Tuple[str, str]],
-) -> List[str]:
-    cols: List[str] = []
+    available_columns: list[tuple[str, str]],
+) -> list[str]:
+    cols: list[str] = []
     for param in parameter_set.iter_data():
         cols.extend([str(col) for col in param.cols])
     return cols
 
 
-def load_dataset(
-    config: diffmp.torch.Config, **kwargs
-) -> diffmp.torch.DiffusionDataset:
+def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     parameter_set = config.dynamics.parameter_set
 
     metadata = pq.read_table(config.dataset)
-    available_columns: List[Tuple[str, str]] = [
+    available_columns: list[tuple[str, str]] = [
         ast.literal_eval(col) for col in metadata.column_names
     ]
 
@@ -56,7 +58,6 @@ def load_dataset(
     [dataset.drop(columns=p.cols, inplace=True) for p in parameter_set.required]
 
     dataset.drop_duplicates(inplace=True)
-    # print(dataset.shape[0])
     if dataset.shape[0] > config.dataset_size:
         weights = np.ones(dataset.shape[0])
         for weight_col1, layer2 in config.weights.items():
@@ -64,10 +65,7 @@ def load_dataset(
                 weights *= dataset[(weight_col1, weight_col2)] ** value
             # weights = dataset[("misc", "weights")] = dataset.misc.rel_c**2
         dataset = dataset.sample(config.dataset_size, weights=weights)
-    # dataset = dataset.sort_values(("misc", "weight"), ascending=False)
-    # dataset = dataset.nlargest(config.dataset_size, ("misc", "rel_c"))
     reg_cols, cond_cols = parameter_set.get_columns()
-    # print(reg_cols, "\n", cond_cols)
     regular = dataset[reg_cols]
     conditioning = dataset[cond_cols]
     regular = torch.tensor(regular.to_numpy(), device=diffmp.utils.DEVICE)
@@ -88,7 +86,7 @@ def calc_param(
 def condition_for_sampling(
     config: diffmp.torch.Config, n_samples: int, instance: diffmp.problems.Instance
 ) -> torch.Tensor:
-    data: Dict[Tuple[str, str], npt.NDArray] = {}
+    data: dict[tuple[str, str], npt.NDArray] = {}
     # for condition in config.dynamics.parameter_set:
     for condition in config.dynamics.parameter_set.iter_condition():
         # if condition not in config.conditioning:

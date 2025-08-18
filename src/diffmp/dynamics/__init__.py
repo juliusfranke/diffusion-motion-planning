@@ -5,12 +5,14 @@ from .base import DynamicsBase
 from .unicycle1 import UnicycleFirstOrder
 from .unicycle2 import UnicycleSecondOrder
 from .car1 import CarWithTrailers
+from .integrator2_3d import Integrator2_3D
 
 
 class Dynamics(Enum):
     unicycle1 = UnicycleFirstOrder
     unicycle2 = UnicycleSecondOrder
     car_with_trailers = CarWithTrailers
+    integrator2_3d = Integrator2_3D
 
 
 def get_dynamics(name: str, timesteps: int) -> DynamicsBase:

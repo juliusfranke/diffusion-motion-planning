@@ -1,5 +1,6 @@
 from functools import partial
 from typing import List
+from meshlib.mrmeshpy import AffineXf3f, Matrix3f, Vector3f, makeCube
 import numpy as np
 import numpy.typing as npt
 
@@ -24,6 +25,7 @@ class UnicycleFirstOrder(DynamicsBase):
         dt: float,
         timesteps: int,
         name: str,
+        size: list[float],
         **kwargs,
     ) -> None:
         parameter_set = get_default_parameter_set()
@@ -94,6 +96,7 @@ class UnicycleFirstOrder(DynamicsBase):
             parameter_set=parameter_set,
             timesteps=timesteps,
             name=name,
+            mesh=makeCube(size=Vector3f(size[0], size[1], 1))
         )
 
     def _step(
@@ -108,6 +111,12 @@ class UnicycleFirstOrder(DynamicsBase):
         next[:, 2] = theta
 
         return next
+
+    def tf_from_state(self, state: npt.NDArray[np.floating]) -> AffineXf3f:
+        xf = AffineXf3f()
+        xf.b = Vector3f(state[0], state[1], 0)
+        xf.A = Matrix3f.rotation(Vector3f(0,0,1), state[2])
+        return xf
 
     def to_mp(self, data: npt.NDArray):
         df = self.prepare_out(data)

@@ -32,6 +32,7 @@ from .dbcbs_ext import (
     DEFAULT_CONFIG,
 )
 
+from .vec import mult_el_wise
 
 __all__ = [
     "DEVICE",
@@ -58,4 +59,5 @@ __all__ = [
     "Solution",
     "execute_task",
     "DEFAULT_CONFIG",
+    "mult_el_wise",
 ]

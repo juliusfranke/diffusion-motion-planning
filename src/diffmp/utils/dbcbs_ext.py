@@ -64,13 +64,13 @@ class Task:
     config: Dict
     timelimit_db_astar: float
     timelimit_db_cbs: float
-    solutions: List[Solution]
+    solutions: list[Solution]
 
 
 def execute_task(task: Task) -> Task:
     tmp1 = tempfile.NamedTemporaryFile()
     tmp2 = tempfile.NamedTemporaryFile()
-    if isinstance(task.instance.data, Dict):
+    if isinstance(task.instance.data, dict):
         instance_data = task.instance.data
     else:
         instance_data = task.instance.to_dict()
@@ -85,6 +85,7 @@ def execute_task(task: Task) -> Task:
         )
     except IndexError:
         results = []
+    breakpoint()
     task.solutions = [Solution.from_db_cbs(sol) for sol in results]
 
     tmp1.close()

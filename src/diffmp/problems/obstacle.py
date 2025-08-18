@@ -68,7 +68,7 @@ class BoxObstacle(Obstacle):
             center = center[:2]
             size = size[:2]
 
-        return {"type": "Box", "center": center, "size": size}
+        return {"type": "box", "center": list(center), "size": list(size)}
 
     @classmethod
     def random(cls, center_bounds: Bounds, size_bounds: Bounds) -> BoxObstacle:

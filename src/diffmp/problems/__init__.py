@@ -2,12 +2,10 @@ from .instance import Instance, Baseline
 from .environment import Environment
 from .obstacle import (
     BoxObstacle,
-    # CylinderObstacle,
     Obstacle,
-    # obstacle_from_dict,
-    # ObstacleType,
 )
 from .robots import Robot
+from .etc import Dim
 
 
 __all__ = [
@@ -16,8 +14,6 @@ __all__ = [
     "Environment",
     "Robot",
     "BoxObstacle",
-    # "CylinderObstacle",
+    "Dim",
     "Obstacle",
-    # "ObstacleType",
-    # "obstacle_from_dict",
 ]

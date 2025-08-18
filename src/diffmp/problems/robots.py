@@ -1,24 +1,42 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
+from meshlib.mrmeshpy import AffineXf3f, Matrix3f, Vector3f
 
 import diffmp
-from diffmp.problems.environment import Environment
+from diffmp.problems.etc import plot_3dmesh, plot_3dmesh_to_2d
 
 if TYPE_CHECKING:
     from diffmp.dynamics import DynamicsBase
+    from diffmp.problems.environment import Environment
+    from diffmp.problems.etc import Dim
 
 
 @dataclass
 class Robot:
-    start: List[float]
-    goal: List[float]
+    start: list[float]
+    goal: list[float]
     dynamics: DynamicsBase
+    dim: Dim
+
+    def plot2d(self, ax: Axes):
+        xf_start = self.dynamics.tf_from_state(np.array(self.start))
+        xf_goal = self.dynamics.tf_from_state(np.array(self.goal))
+
+        plot_3dmesh_to_2d(self.dynamics.mesh, xf=xf_start, ax=ax, face_color="red")
+        plot_3dmesh_to_2d(self.dynamics.mesh, xf=xf_goal, ax=ax, face_color="green")
+
+    def plot3d(self, ax: Axes):
+        xf_start = self.dynamics.tf_from_state(np.array(self.start))
+        xf_goal = self.dynamics.tf_from_state(np.array(self.goal))
+
+        plot_3dmesh(self.dynamics.mesh, xf=xf_start, ax=ax, face_color="red")
+        plot_3dmesh(self.dynamics.mesh, xf=xf_goal, ax=ax, face_color="green")
 
     def plot(self, ax: Optional[Axes] = None) -> None:
         if ax is None:
@@ -42,31 +60,33 @@ class Robot:
             head_width=0.2,
         )
 
-    def to_dict(self) -> Dict:
-        return {"start": self.start, "goal": self.goal, "type": self.dynamics}
+    def to_dict(self) -> dict:
+        return {"start": self.start, "goal": self.goal, "type": self.dynamics.name}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, List[float] | str]) -> Robot:
+    def from_dict(cls, data: dict[str, list[float] | str]) -> Robot:
         assert isinstance(data["start"], list)
         assert isinstance(data["goal"], list)
         assert isinstance(data["type"], str)
         start = data["start"]
         goal = data["goal"]
+        dim = Dim.TWO_D if len(data["start"]) == 2 else Dim.THREE_D
         dynamics = diffmp.dynamics.get_dynamics(data["type"], 1)
-        return cls(start=start, goal=goal, dynamics=dynamics)
+        return cls(start=start, goal=goal, dynamics=dynamics, dim=dim)
 
     @classmethod
-    def random(cls, env: Environment, dynamics_type: str) -> Optional[Robot]:
+    def random(cls, env: Environment, dynamics_type: str, dim: Dim) -> Optional[Robot]:
         dynamics = diffmp.dynamics.get_dynamics(dynamics_type, 1)
-        start_free = env.random_free(clearance=0.26)
+
+        start_free = env.random_free(dynamics)
         if start_free is None:
             return None
-        x_start, y_start = start_free
-        start = dynamics.random_state(x=x_start, y=y_start)
-        goal_free = env.random_free(clearance=0.26)
+
+        goal_free = env.random_free(dynamics)
         if goal_free is None:
             return None
-        x_goal, y_goal = goal_free
-        goal = dynamics.random_state(x=x_goal, y=y_goal)
 
-        return cls(start=start, goal=goal, dynamics=dynamics_type)
+        print(start_free)
+        print(goal_free)
+
+        return cls(start=start_free, goal=goal_free, dynamics=dynamics, dim=dim)

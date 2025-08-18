@@ -1,7 +1,15 @@
 from enum import Enum
 
 import numpy as np
-from meshlib.mrmeshpy import Vector2f, Vector3f
+from meshlib.mrmeshpy import (
+    AABBTree,
+    AffineXf3f,
+    MeshPart,
+    Vector2f,
+    Vector3f,
+    findCollidingTriangles,
+    findSignedDistance,
+)
 import matplotlib.pyplot as plt
 
 # from matplotlib.patches import Polygon
@@ -74,11 +82,24 @@ def set_axes_equal(ax):
 
 
 def plot_3dmesh(
-    mesh: Mesh, ax: Axes3D, alpha=0.5, face_color="lightblue", edge_color="black"
+    mesh: Mesh,
+    ax: Axes3D,
+    alpha=0.5,
+    face_color="lightblue",
+    edge_color="black",
+    xf: Optional[AffineXf3f] = None,
 ):
     verts_t = np.transpose(getNumpyVerts(mesh))
     faces_t = np.transpose(getNumpyFaces(mesh.topology))
+    if xf is not None:
+        A = np.array([[xf.A[r][c] for c in range(3)] for r in range(3)], dtype=float)
+        b = np.array([[xf.b.x], [xf.b.y], [xf.b.z]], dtype=float)
+        verts_t = A @ verts_t + b
     verts = list(zip(verts_t[0], verts_t[1], verts_t[2]))
+    # if xf is not None:
+    #     A = np.array([[xf.A[r][c] for c in range(3)] for r in range(3)], dtype=float)
+    #     b = np.array([[xf.b.x], [xf.b.y], [xf.b.z]], dtype=float)
+    #     verts_t = A @ verts_t + b
 
     # Each face is a triangle (i, j, k)
     tri_verts = [
@@ -98,8 +119,13 @@ def plot_3dmesh_to_2d(
     edge_color="black",
     alpha=0.5,
     ax: Optional[Axes] = None,
+    xf: Optional[AffineXf3f] = None,
 ):
     verts_t = np.transpose(getNumpyVerts(mesh))
+    if xf is not None:
+        A = np.array([[xf.A[r][c] for c in range(3)] for r in range(3)], dtype=float)
+        b = np.array([[xf.b.x], [xf.b.y], [xf.b.z]], dtype=float)
+        verts_t = A @ verts_t + b
     faces_t = np.transpose(getNumpyFaces(mesh.topology))
     x, y = verts_t[:2]
     i, j, k = faces_t[:3]
@@ -121,3 +147,84 @@ def plot_3dmesh_to_2d(
         for geom in merged.geoms:
             xs, ys = geom.exterior.xy
             ax.fill(xs, ys, facecolor=face_color, edgecolor=edge_color, alpha=alpha)
+
+
+def _np_affine_from_mr(xf: AffineXf3f):
+    """Convert mr.AffineXf3f to (A, b) numpy arrays."""
+    A = np.array([[xf.A[r][c] for c in range(3)] for r in range(3)], dtype=float)
+    b = np.array([xf.b.x, xf.b.y, xf.b.z], dtype=float)
+    return A, b
+
+def _invert_rigid(A: np.ndarray, b: np.ndarray):
+    """Inverse of a rigid transform x' = A x + b (A is rotation)."""
+    A_inv = A.T
+    b_inv = -A_inv @ b
+    return A_inv, b_inv
+
+def _signed_distance_pt_mesh(ptA: Vector3f, mp: MeshPart):
+    """
+    Call the point→mesh signed distance API and return a robust signed distance.
+    Handles field-name differences across MRMesh versions.
+    """
+    sd = findSignedDistance(ptA, mp)  # SignedDistanceToMeshResult
+
+    # Try common attribute names first
+    if hasattr(sd, "signedDist"):
+        return float(sd.signedDist)
+
+    # Fallbacks
+    dist = None
+    if hasattr(sd, "dist"):               # some versions expose 'dist'
+        dist = float(sd.dist)
+    elif hasattr(sd, "distance"):         # or 'distance'
+        dist = float(sd.distance)
+    elif hasattr(sd, "distanceSq"):       # last resort: sqrt(distanceSq)
+        dist = float(sd.distanceSq) ** 0.5
+    else:
+        dist = float("inf")
+
+    sign = 1
+    if hasattr(sd, "sign"):
+        sign = -1 if sd.sign < 0 else 1
+
+    return sign * dist
+
+def _point_inside_or_on(pt: np.ndarray, mp: MeshPart, tol: float) -> bool:
+    sdist = _signed_distance_pt_mesh(Vector3f(*pt), mp)
+    return sdist <= tol
+
+def meshes_collide(
+    mesh_a: Mesh, mesh_b: Mesh, xf: AffineXf3f, tol: float = 1e-6
+) -> bool:
+    mp_a = MeshPart(mesh_a)
+    mp_b = MeshPart(mesh_b)
+
+    # 1) Fast: face–face intersections (supports rigidB2A)
+    hits = findCollidingTriangles(mp_a, mp_b, xf, True)
+    if len(hits) > 0:
+        return True
+
+    # Prepare transforms
+    if xf is not None:
+        A, b = _np_affine_from_mr(xf)
+        A_inv, b_inv = _invert_rigid(A, b)
+    else:
+        A = A_inv = np.eye(3, dtype=float)
+        b = b_inv = np.zeros(3, dtype=float)
+
+    # 2) Any vertex of A inside/on transformed B?
+    verts_a = getNumpyVerts(mesh_a)  # shape (Na, 3)
+    # Map A-vertices into B's local frame using inverse transform
+    verts_a_in_B = (verts_a @ A_inv.T) + b_inv  # (Na,3)
+    for pB in verts_a_in_B:
+        if _point_inside_or_on(pB, mp_b, tol):
+            return True
+
+    # 3) Any vertex of transformed B inside/on A?
+    verts_b = getNumpyVerts(mesh_b)  # (Nb,3)
+    verts_b_in_A = (verts_b @ A.T) + b           # (Nb,3)
+    for pA in verts_b_in_A:
+        if _point_inside_or_on(pA, mp_a, tol):
+            return True
+
+    return False
