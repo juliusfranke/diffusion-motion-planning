@@ -1,24 +1,23 @@
-from functools import partial
-import math
-import tempfile
-import multiprocessing as mp
-import gc
-from typing import Any, Dict, Optional, Tuple
-import random
+from __future__ import annotations
 
-from aim.sdk.run import defaultdict
-from pandas.io.sql import com
-from tqdm import tqdm
+import multiprocessing as mp
+import random
+import tempfile
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Optional, Tuple
+
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch.utils.data import DataLoader, random_split
+from tqdm import tqdm
 
 import diffmp
-from pathlib import Path
+import diffmp.problems as pb
+import diffmp.utils as du
 
-
-from . import CompositeConfig, Model, compute_test_loss, ExponentialMovingAverage
+from . import CompositeConfig, ExponentialMovingAverage, Model, compute_test_loss
 
 
 def run_epoch(
@@ -32,22 +31,22 @@ def run_epoch(
     for i, data in enumerate(training_loader):
         regular = data["regular"]
         conditioning = data["conditioning"]
+        discretized = data["discretized"]
+        robot_id = data["robot_id"]
         if not validate:
             model.optimizer.zero_grad()
         t = torch.randint(
             model.config.denoising_steps,
             size=(regular.shape[0],),
-            device=diffmp.utils.DEVICE,
+            device=du.DEVICE,
         )
         alpha_t = (
-            torch.index_select(
-                torch.tensor(alpha_bars, device=diffmp.utils.DEVICE), 0, t
-            )
+            torch.index_select(torch.tensor(alpha_bars, device=du.DEVICE), 0, t)
             .unsqueeze(1)
-            .to(diffmp.utils.DEVICE)
+            .to(du.DEVICE)
         )
 
-        epsilon = torch.randn(*regular.shape, device=diffmp.utils.DEVICE)
+        epsilon = torch.randn(*regular.shape, device=du.DEVICE)
 
         data_noised = alpha_t**0.5 * regular + epsilon * (1 - alpha_t) ** 0.5
 
@@ -56,7 +55,12 @@ def run_epoch(
         else:
             x = torch.concat([data_noised, t.unsqueeze(1)], dim=-1)
 
-        out = model(x)
+        if discretized is not None:
+            # TODO this is wrong lol
+            scale = torch.ones(regular.shape[0], dtype=torch.int) * 0
+        else:
+            scale = None
+        out = model(x, discretized, scale, robot_id)
 
         loss = model.loss_fn(out, epsilon)
 
@@ -72,6 +76,7 @@ def run_epoch(
 def run_test_composite(
     composite_config: CompositeConfig, trials: int = 1, n_instances: int = 1
 ) -> float:
+    # TODO change test loss computation
     # test_losses = []
     instance_results = defaultdict(list)
     tasks = []
@@ -83,38 +88,35 @@ def run_test_composite(
         for _ in range(trials):
             tmp_path = tempfile.NamedTemporaryFile(suffix=".yaml")
             tmp_paths.append(tmp_path)
-            diffmp.utils.export_composite(
+            du.export_composite(
                 composite_config,
                 instance,
                 Path(tmp_path.name),
-                n_mp=diffmp.utils.DEFAULT_CONFIG["num_primitives_0"],
+                n_mp=du.DEFAULT_CONFIG["num_primitives_0"],
             )
-            cfg = diffmp.utils.DEFAULT_CONFIG | {"mp_path": str(tmp_path.name)}
+            cfg = du.DEFAULT_CONFIG | {"mp_path": str(tmp_path.name)}
             if instance.robots[0].dynamics == "car1_v0":
                 cfg["delta_0"] = 0.9
-            task = diffmp.utils.Task(instance, cfg, 1000, 1500, [])
+            task = du.Task(instance, cfg, 1000, 1500, [])
             tasks.append(task)
     with mp.Pool(4, maxtasksperchild=10) as p:
-        for executed_task in p.imap_unordered(diffmp.utils.execute_task, tasks):
+        for executed_task in p.imap_unordered(du.execute_task, tasks):
             instance = executed_task.instance
-            baseline = instance.baseline
+            if isinstance(instance, pb.Instance):
+                baseline = instance.baseline
+                name = instance.name
+            else:
+                baseline = pb.Baseline.from_dict(instance["baseline"])
+                name = instance["name"]
             assert isinstance(baseline, diffmp.problems.Baseline)
-            # assert isinstance(instance.results, list)
             if len(executed_task.solutions) == 0:
-
-                instance_results[instance.name].append(
-                    diffmp.problems.Baseline(0, 0, 0)
-                )
-                # test_loss = compute_test_loss(
-                #     0, baseline.success, 0, baseline.duration, 0, baseline.cost
-                # )
-                # test_losses.append(test_loss)
+                instance_results[name].append(diffmp.problems.Baseline(0, 0, 0))
                 continue
             this_success = 1
             this_duration = executed_task.solutions[0].runtime
             this_cost = min([s.cost for s in executed_task.solutions])
             # this_cost = executed_task.solutions[0].cost
-            instance_results[instance.name].append(
+            instance_results[name].append(
                 diffmp.problems.Baseline(this_success, this_duration, this_cost)
             )
             # test_loss = compute_test_loss(
@@ -161,55 +163,98 @@ def run_test_composite(
 
 
 def run_test(model: Model, trials: int = 1, n_instances: int = 1) -> float:
-    test_losses = []
     tasks = []
     tmp_paths = []
     instances = random.sample(model.config.test_instances, n_instances)
+    test_results = {instance.name: [] for instance in instances}
     for instance in instances:
         for _ in range(trials):
-            tmp_path = tempfile.NamedTemporaryFile(suffix=".yaml")
-            tmp_paths.append(tmp_path)
-            diffmp.utils.export(
-                model,
-                instance,
-                Path(tmp_path.name),
-                n_mp=diffmp.utils.DEFAULT_CONFIG["num_primitives_0"],
-            )
-            cfg = diffmp.utils.DEFAULT_CONFIG | {"mp_path": str(tmp_path.name)}
+            mp_paths = []
+            for robot_idx in range(model.config.n_robots):
+                # tmp_path = tempfile.NamedTemporaryFile(suffix=".yaml")
+                tmp_path = tempfile.NamedTemporaryFile(suffix=".msgpack")
+                tmp_paths.append(tmp_path)
+                du.export(
+                    model,
+                    instance,
+                    Path(tmp_path.name),
+                    n_mp=du.DEFAULT_CONFIG["num_primitives_0"] * 10,
+                    robot_idx=robot_idx,
+                )
+                mp_paths.append(str(tmp_path.name))
+            cfg = du.DEFAULT_CONFIG | {"mp_path": mp_paths}
             if instance.robots[0].dynamics == "car1_v0":
                 cfg["delta_0"] = 0.9
-            task = diffmp.utils.Task(instance, cfg, 1000, 1500, [])
+            task = du.Task(instance, cfg, 1000, 1500, [])
             tasks.append(task)
+    for task in tasks:
+        task.instance = task.instance.to_dict()
     with mp.Pool(4, maxtasksperchild=10) as p:
-        for executed_task in p.imap_unordered(diffmp.utils.execute_task, tasks):
-            baseline = executed_task.instance.baseline
+        for executed_task in p.imap_unordered(du.execute_task, tasks):
+            instance = executed_task.instance
+            if isinstance(instance, pb.Instance):
+                baseline = instance.baseline
+                name = instance.name
+            else:
+                baseline = pb.Baseline.from_dict(instance["baseline"])
+                name = instance["name"]
             assert isinstance(baseline, diffmp.problems.Baseline)
             if len(executed_task.solutions) == 0:
-                test_loss = compute_test_loss(
-                    0, baseline.success, 0, baseline.duration, 0, baseline.cost
-                )
-                test_losses.append(test_loss)
+                test_results[name].append([0, 0, 0])
+                # test_loss = compute_test_loss(
+                #     0, baseline.success, 0, baseline.duration, 0, baseline.cost
+                # )
+                # test_losses.append(test_loss)
                 continue
             this_success = 1
             this_duration = executed_task.solutions[0].runtime
             this_cost = min([s.cost for s in executed_task.solutions])
-            test_loss = compute_test_loss(
-                this_success,
-                baseline.success,
-                this_duration,
-                baseline.duration,
-                this_cost,
-                baseline.cost,
+            test_results[name].append([1, this_duration, this_cost])
+            # print(this_duration, baseline.duration, this_cost, baseline.cost)
+            # test_loss = compute_test_loss(
+            #     this_success,
+            #     baseline.success,
+            #     this_duration,
+            #     baseline.duration,
+            #     this_cost,
+            #     baseline.cost,
+            # )
+            # test_losses.append(test_loss)
+    test_losses = []
+    for instance in instances:
+        name = instance.name
+        baseline = instance.baseline
+        assert isinstance(baseline, pb.Baseline)
+        results = np.array(test_results[name])
+        successes = np.sum(results[:, 0])
+        debug = True
+        if successes == 0:
+            loss = compute_test_loss(
+                0, baseline.success, 0, baseline.duration, 0, baseline.cost, debug=debug
             )
-            test_losses.append(test_loss)
+            test_losses.append(loss)
+            continue
+        success = successes / trials
+        duration = np.sum(results[:, 1]) / successes
+        cost = np.sum(results[:, 2]) / successes
+        loss = compute_test_loss(
+            success,
+            baseline.success,
+            duration,
+            baseline.duration,
+            cost,
+            baseline.cost,
+            debug=debug,
+        )
+        test_losses.append(loss)
 
     for tmp_path in tmp_paths:
         tmp_path.close()
-    return float(np.median(test_losses))
+    return float(np.mean(test_losses))
 
 
 def get_data_loader(model: Model) -> Tuple[DataLoader, DataLoader]:
-    dataset = diffmp.utils.load_dataset(model.config)
+    dataset = du.load_dataset(model.config)
 
     test_abs = int(len(dataset) * model.config.validation_split)
     train_subset, val_subset = random_split(
@@ -260,7 +305,7 @@ def train_composite(
                 [m.save() for m in composite_config.models]
         pbar.update(epoch_test // 2)
         pbar.write(f"{epoch}: {ema_test_loss.ema} ({best_test})")
-        if not isinstance(composite_config.optuna, diffmp.utils.OptunaReporter):
+        if not isinstance(composite_config.optuna, du.OptunaReporter):
             continue
         composite_config.optuna.report_test(ema_test_loss.ema, epoch)
 
@@ -272,10 +317,11 @@ def train(
     benchmark_test: bool = True,
     training_loader: Optional[DataLoader] = None,
     validation_loader: Optional[DataLoader] = None,
+    test_epoch: int = 100,
 ) -> None:
     val_loss = np.inf
     best_val_loss = np.inf
-    model.to(diffmp.utils.DEVICE)
+    model.to(du.DEVICE)
     best_test = 0
     ema_test_loss = ExponentialMovingAverage(alpha=0.2)
 
@@ -307,9 +353,9 @@ def train(
                 continue
             if epoch < 1:
                 continue
-            if (epoch + 1) % 10 != 0:
+            if (epoch + 1) % test_epoch != 0:
                 continue
-            test_loss = run_test(model, trials=3, n_instances=2)
+            test_loss = run_test(model, trials=5, n_instances=10)
             ema_test_loss.update(test_loss)
 
             assert isinstance(ema_test_loss.ema, float)

@@ -1,18 +1,11 @@
 from functools import partial
-from typing import List
-from meshlib.mrmeshpy import AffineXf3f, Matrix3f, Vector3f, makeCube
+
 import numpy as np
 import numpy.typing as npt
+from meshlib.mrmeshpy import AffineXf3f, Matrix3f, Vector3f, makeCube
 
-from diffmp.dynamics.base import DynamicsBase
-from diffmp.utils import (
-    CalculatedParameter,
-    DatasetParameter,
-    get_default_parameter_set,
-    ParameterSeq,
-)
-from diffmp.utils import Theta_to_theta, theta_to_Theta
-import pandas as pd
+import diffmp.utils as du
+from .base import DynamicsBase
 
 
 class UnicycleFirstOrder(DynamicsBase):
@@ -26,52 +19,64 @@ class UnicycleFirstOrder(DynamicsBase):
         timesteps: int,
         name: str,
         size: list[float],
+        n_robots: int = 1,
         **kwargs,
     ) -> None:
-        parameter_set = get_default_parameter_set()
+        parameter_set = du.get_default_parameter_set()
         actions_set = []
         for i in range(timesteps):
             actions_set.append(("actions", f"s_{i}"))
             actions_set.append(("actions", f"phi_{i}"))
-
-        regular_parameters: ParameterSeq = [
-            DatasetParameter("actions", 2 * timesteps, 0, actions_set),
-            DatasetParameter(
+        r_cols = [f"robot_{i:03}" for i in range(n_robots)]
+        regular_parameters: du.ParameterSeq = [
+            du.DatasetParameter("actions", 0, actions_set),
+            du.DatasetParameter(
                 "theta_0",
-                1,
                 0,
                 [("states", "theta_0")],
             ),
-            CalculatedParameter(
+            du.CalculatedParameter(
                 "Theta_0",
-                2,
                 0,
                 [("states", "Theta_0_x"), ("states", "Theta_0_y")],
                 ["theta_0"],
-                partial(theta_to_Theta, col1="states"),
-                partial(Theta_to_theta, col1="states"),
+                partial(du.theta_to_Theta, col1="states"),
+                partial(du.Theta_to_theta, col1="states"),
             ),
-            DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
-            DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
+            du.DatasetParameter("theta_s", 0, [(r_col, "theta_s") for r_col in r_cols]),
+            du.DatasetParameter("theta_g", 0, [(r_col, "theta_g") for r_col in r_cols]),
+            du.DatasetParameter("x_s", 0, [(r_col, "x_s") for r_col in r_cols]),
+            du.DatasetParameter("x_g", 0, [(r_col, "x_g") for r_col in r_cols]),
+            du.DatasetParameter("y_s", 0, [(r_col, "y_s") for r_col in r_cols]),
+            du.DatasetParameter("y_g", 0, [(r_col, "y_g") for r_col in r_cols]),
         ]
-        condition_parameters: ParameterSeq = [
-            CalculatedParameter(
-                "Theta_s",
-                2,
+        condition_parameters: du.ParameterSeq = [
+            du.CalculatedParameter(
+                "start_T",
                 0,
-                [("env", "Theta_s_x"), ("env", "Theta_s_y")],
+                [(r_col, "Theta_s_x") for r_col in r_cols]
+                + [(r_col, "Theta_s_y") for r_col in r_cols],
                 ["theta_s"],
-                partial(theta_to_Theta, col1="env", i="s"),
-                partial(Theta_to_theta, col1="env", i="s"),
+                partial(du.theta_to_Theta, col1=r_cols, i="s"),
+                partial(du.Theta_to_theta, col1=r_cols, i="s"),
             ),
-            CalculatedParameter(
-                "Theta_g",
-                2,
+            du.CalculatedParameter(
+                "Theta_s",
                 0,
-                [("env", "Theta_g_x"), ("env", "Theta_g_y")],
+                [(r_col, "Theta_s_x") for r_col in r_cols]
+                + [(r_col, "Theta_s_y") for r_col in r_cols],
+                ["theta_s"],
+                partial(du.theta_to_Theta, col1=r_cols, i="s"),
+                partial(du.Theta_to_theta, col1=r_cols, i="s"),
+            ),
+            du.CalculatedParameter(
+                "Theta_g",
+                0,
+                [(r_col, "Theta_g_x") for r_col in r_cols]
+                + [(r_col, "Theta_g_y") for r_col in r_cols],
                 ["theta_g"],
-                partial(theta_to_Theta, col1="env", i="g"),
-                partial(Theta_to_theta, col1="env", i="g"),
+                partial(du.theta_to_Theta, col1=r_cols, i="g"),
+                partial(du.Theta_to_theta, col1=r_cols, i="g"),
             ),
         ]
         parameter_set.add_parameters(
@@ -96,7 +101,11 @@ class UnicycleFirstOrder(DynamicsBase):
             parameter_set=parameter_set,
             timesteps=timesteps,
             name=name,
-            mesh=makeCube(size=Vector3f(size[0], size[1], 1))
+            mesh=makeCube(
+                size=Vector3f(size[0], size[1], 1),
+                base=Vector3f(-size[0] / 2, -size[1] / 2, -0.5),
+            ),
+            n_robots=n_robots,
         )
 
     def _step(
@@ -115,7 +124,7 @@ class UnicycleFirstOrder(DynamicsBase):
     def tf_from_state(self, state: npt.NDArray[np.floating]) -> AffineXf3f:
         xf = AffineXf3f()
         xf.b = Vector3f(state[0], state[1], 0)
-        xf.A = Matrix3f.rotation(Vector3f(0,0,1), state[2])
+        xf.A = Matrix3f.rotation(Vector3f(0, 0, 1), state[2])
         return xf
 
     def to_mp(self, data: npt.NDArray):
@@ -129,7 +138,7 @@ class UnicycleFirstOrder(DynamicsBase):
         actions = np.clip(actions, -0.5, 0.5)
         state = np.zeros((df.shape[0], self.q_dim))
         state[:, 2] = df.states.theta_0
-        states: List[npt.NDArray] = [state]
+        states: list[npt.NDArray] = [state]
         for i in range(self.timesteps):
             state = self.step(state, actions[i], clip=True)
             states.append(state)

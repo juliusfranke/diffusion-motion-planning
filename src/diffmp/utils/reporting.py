@@ -68,7 +68,7 @@ class TQDMReporter(Reporter):
         super().__init__()
         self.pbar: Optional[tqdm] = None
         self.requires_start = True
-        self.postfix = {"training": np.inf, "validation": np.inf}
+        self.postfix = {"train": np.inf, "val": np.inf}
         self.step = 0
 
     def start(self, total_steps: int) -> None:
@@ -84,20 +84,20 @@ class TQDMReporter(Reporter):
 
     def report_train(self, train_loss: float, step: int, **kwargs) -> None:
         super().report_train(train_loss, step, **kwargs)
-        self.postfix["training"] = train_loss
+        self.postfix["train"] = train_loss
         self.__update_postfix(step)
         return None
 
     def report_validate(self, validation_loss: float, step: int, **kwargs) -> None:
         super().report_validate(validation_loss, step, **kwargs)
-        self.postfix["validation"] = validation_loss
+        self.postfix["val"] = validation_loss
         self.__update_postfix(step)
         return None
 
     def report_test(self, test_loss: float, step: int, **kwargs) -> None:
         super().report_test(test_loss, step, **kwargs)
         if self.pbar is not None:
-            self.pbar.write(f"Epoch {step+1}: {test_loss}")
+            self.pbar.write(f"Epoch {step+1}: {test_loss:.4f}")
         return None
 
     def close(self) -> None:

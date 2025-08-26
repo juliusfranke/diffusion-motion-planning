@@ -34,12 +34,16 @@ class Obstacle(ABC):
 
     @classmethod
     @abstractmethod
+    def from_dict(cls, data: dict) -> Obstacle: ...
+
+    @classmethod
+    @abstractmethod
     def random(cls, center_bounds: Bounds, size_bounds: Bounds) -> Obstacle: ...
 
 
 class BoxObstacle(Obstacle):
-    center: Vector3f
-    size: Vector3f
+    center: tuple[float, float, float]
+    size: tuple[float, float, float]
 
     def __init__(self, center: Vector3f, size: Vector3f) -> None:
         if size.z == 0:
@@ -50,14 +54,12 @@ class BoxObstacle(Obstacle):
             assert center.z > 0
             self.dim = Dim.THREE_D
 
-        self.center = center
-        self.size = size
+        self.center = tuple(center)
+        self.size = tuple(size)
 
         self.mesh = makeCube()
-        scaling = AffineXf3f.xfAround(
-            Matrix3f.scale(self.size), stable=Vector3f(0, 0, 0)
-        )
-        translation = AffineXf3f.translation(self.center)
+        scaling = AffineXf3f.xfAround(Matrix3f.scale(size), stable=Vector3f(0, 0, 0))
+        translation = AffineXf3f.translation(center)
         self.mesh.transform(scaling)
         self.mesh.transform(translation)
 
@@ -69,6 +71,20 @@ class BoxObstacle(Obstacle):
             size = size[:2]
 
         return {"type": "box", "center": list(center), "size": list(size)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Obstacle:
+        assert isinstance(data["center"], list)
+        assert isinstance(data["size"], list)
+        assert len(data["center"]) == len(data["size"])
+        if len(data["center"]) == 2:
+            center = Vector3f(*data["center"], 0)
+            size = Vector3f(*data["size"], 0)
+        else:
+            center = Vector3f(*data["center"])
+            size = Vector3f(*data["size"])
+
+        return cls(center, size)
 
     @classmethod
     def random(cls, center_bounds: Bounds, size_bounds: Bounds) -> BoxObstacle:

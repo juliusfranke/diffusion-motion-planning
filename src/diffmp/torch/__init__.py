@@ -5,7 +5,7 @@ from torch import Tensor
 
 from .dataset import DiffusionDataset
 from .loss import mae, mse, sinkhorn, compute_test_loss, ExponentialMovingAverage
-from .model import CompositeConfig, Config, Model
+from .model import CompositeConfig, Config, Model, DiscretizeConfig
 from .sample import sample
 from .schedules import NoiseSchedule
 from .train import train, train_composite
@@ -38,4 +38,5 @@ __all__ = [
     "train",
     "train_composite",
     "sample",
+    "DiscretizeConfig",
 ]

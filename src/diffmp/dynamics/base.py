@@ -1,20 +1,16 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Optional
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from meshlib.mrmeshpy import (
     AffineXf3f,
-    Matrix3f,
     Mesh,
-    Vector2f,
-    Vector3f,
-    makeCube,
-    makePlane,
 )
 
-import diffmp
+import diffmp.utils as du
+import diffmp.problems as pb
 
 
 class DynamicsBase(ABC):
@@ -23,10 +19,11 @@ class DynamicsBase(ABC):
         dt: float,
         q: list[str],
         u: list[str],
-        parameter_set: diffmp.utils.ParameterSet,
+        parameter_set: du.ParameterSet,
         timesteps: int,
         name: str,
         mesh: Mesh,
+        n_robots: int = 0,
         q_lims: Optional[dict[str, dict[str, float]]] = None,
         u_lims: Optional[dict[str, dict[str, float]]] = None,
     ) -> None:
@@ -43,8 +40,10 @@ class DynamicsBase(ABC):
         self.timesteps = timesteps
         self.name = name
         self.mesh = mesh
+        self.n_robots = n_robots
+        self.dim: pb.Dim = pb.Dim.TWO_D
 
-    def random_state(self, **kwargs) -> List[float]:
+    def random_state(self, **kwargs) -> list[float]:
         state = np.zeros(self.q_dim)
         for i, name in enumerate(self.q):
             if value := kwargs.get(name):
@@ -85,9 +84,10 @@ class DynamicsBase(ABC):
                 u[:, i] = np.clip(
                     u[:, i], self._u_lims["min"][i], self._u_lims["max"][i]
                 )
-        assert (self._u_lims["min"] - eps <= u).all() and (
-            (u <= self._u_lims["max"] + eps).all()
-        ).all(), "u is not within bounds"
+        else:
+            assert (self._u_lims["min"] - eps <= u).all() and (
+                (u <= self._u_lims["max"] + eps).all()
+            ).all(), "u is not within bounds"
 
         q_new = self._step(q, u)
 
@@ -98,11 +98,12 @@ class DynamicsBase(ABC):
                     self._q_lims["min"][i] + eps,
                     self._q_lims["max"][i] - eps,
                 )
-        assert (self._q_lims["min"] <= q_new).all() and (
-            (q_new <= self._q_lims["max"]).all()
-        ).all(), (
-            f"q is not within bounds {q_new[:, 2], np.max(q_new[:, 2]), np.min(q_new[:, 2]), q_new.shape, self._q_lims}"
-        )
+        else:
+            assert (self._q_lims["min"] <= q_new).all() and (
+                (q_new <= self._q_lims["max"]).all()
+            ).all(), (
+                f"q is not within bounds {q_new[:, 2], np.max(q_new[:, 2]), np.min(q_new[:, 2]), q_new.shape, self._q_lims}"
+            )
         return q_new
 
     def prepare_out(self, data: npt.NDArray) -> pd.DataFrame:
@@ -110,7 +111,7 @@ class DynamicsBase(ABC):
         columns = pd.MultiIndex.from_tuples(reg_cols)
         df = pd.DataFrame(data, columns=columns)
         for param in self.parameter_set.iter_regular():
-            if isinstance(param, diffmp.utils.DatasetParameter):
+            if isinstance(param, du.DatasetParameter):
                 continue
             if param.fr is None:
                 continue
@@ -121,7 +122,7 @@ class DynamicsBase(ABC):
     def tf_from_state(self, state: npt.NDArray[np.floating]) -> AffineXf3f: ...
 
     @abstractmethod
-    def to_mp(self, data: npt.NDArray) -> Dict: ...
+    def to_mp(self, data: npt.NDArray) -> dict: ...
 
     @abstractmethod
     def _step(
@@ -140,8 +141,8 @@ class DynamicsBase(ABC):
 
     @staticmethod
     def _lims_to_vec(
-        lims: None | Dict[str, Dict[str, float]], names: List[str]
-    ) -> Dict[str, npt.NDArray[np.floating]]:
+        lims: None | dict[str, dict[str, float]], names: list[str]
+    ) -> dict[str, npt.NDArray[np.floating]]:
         if not lims:
             return {
                 "min": np.array([-np.inf] * len(names)),

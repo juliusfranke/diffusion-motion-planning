@@ -1,17 +1,11 @@
 from functools import partial
-from typing import List
+
 import numpy as np
 import numpy.typing as npt
 
-from diffmp.dynamics.base import DynamicsBase
-from diffmp.utils import (
-    CalculatedParameter,
-    DatasetParameter,
-    get_default_parameter_set,
-    theta_to_Theta,
-    Theta_to_theta,
-)
-import pandas as pd
+import diffmp.utils as du
+
+from .base import DynamicsBase
 
 
 class UnicycleSecondOrder(DynamicsBase):
@@ -28,7 +22,7 @@ class UnicycleSecondOrder(DynamicsBase):
         name: str,
         **kwargs,
     ) -> None:
-        parameter_set = get_default_parameter_set()
+        parameter_set = du.get_default_parameter_set()
         actions_columns = []
         for i in range(timesteps):
             actions_columns.append(("actions", f"a_{i}"))
@@ -36,31 +30,31 @@ class UnicycleSecondOrder(DynamicsBase):
 
         parameter_set.add_parameters(
             [
-                DatasetParameter("actions", 2 * timesteps, 0, actions_columns),
-                DatasetParameter(
+                du.DatasetParameter("actions", 2 * timesteps, 0, actions_columns),
+                du.DatasetParameter(
                     "theta_0",
                     1,
                     0,
                     [("states", "theta_0")],
                 ),
-                DatasetParameter(
+                du.DatasetParameter(
                     "s_0",
                     1,
                     0,
                     [("states", "s_0")],
                 ),
-                DatasetParameter(
+                du.DatasetParameter(
                     "phi_0",
                     1,
                     0,
                     [("states", "phi_0")],
                 ),
-                DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
-                DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
-                DatasetParameter("s_s", 1, 0, [("env", "s_s")]),
-                DatasetParameter("s_g", 1, 0, [("env", "s_g")]),
-                DatasetParameter("phi_s", 1, 0, [("env", "phi_s")]),
-                DatasetParameter("phi_g", 1, 0, [("env", "phi_g")]),
+                du.DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
+                du.DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
+                du.DatasetParameter("s_s", 1, 0, [("env", "s_s")]),
+                du.DatasetParameter("s_g", 1, 0, [("env", "s_g")]),
+                du.DatasetParameter("phi_s", 1, 0, [("env", "phi_s")]),
+                du.DatasetParameter("phi_g", 1, 0, [("env", "phi_g")]),
             ],
             condition=False,
         )
@@ -72,32 +66,32 @@ class UnicycleSecondOrder(DynamicsBase):
             states_columns.append(("actions", f"phi_{i}"))
         parameter_set.add_parameters(
             [
-                CalculatedParameter(
+                du.CalculatedParameter(
                     "Theta_0",
                     2,
                     0,
                     [("states", "Theta_0_x"), ("states", "Theta_0_y")],
                     ["theta_0"],
-                    partial(theta_to_Theta, col1="states"),
-                    partial(Theta_to_theta, col1="states"),
+                    partial(du.theta_to_Theta, col1="states"),
+                    partial(du.Theta_to_theta, col1="states"),
                 ),
-                CalculatedParameter(
+                du.CalculatedParameter(
                     "Theta_s",
                     2,
                     0,
                     [("env", "Theta_s_x"), ("env", "Theta_s_y")],
                     ["theta_s"],
-                    partial(theta_to_Theta, col1="env", i="s"),
-                    partial(Theta_to_theta, col1="env", i="s"),
+                    partial(du.theta_to_Theta, col1="env", i="s"),
+                    partial(du.Theta_to_theta, col1="env", i="s"),
                 ),
-                CalculatedParameter(
+                du.CalculatedParameter(
                     "Theta_g",
                     2,
                     0,
                     [("env", "Theta_g_x"), ("env", "Theta_g_y")],
                     ["theta_g"],
-                    partial(theta_to_Theta, col1="env", i="g"),
-                    partial(Theta_to_theta, col1="env", i="g"),
+                    partial(du.theta_to_Theta, col1="env", i="g"),
+                    partial(du.Theta_to_theta, col1="env", i="g"),
                 ),
             ],
             condition=False,
@@ -120,7 +114,7 @@ class UnicycleSecondOrder(DynamicsBase):
             name=name,
         )
 
-    def random_state(self, **kwargs) -> List[float]:
+    def random_state(self, **kwargs) -> list[float]:
         state = super().random_state(**kwargs)
         state[3] = 0
         state[4] = 0
@@ -173,7 +167,7 @@ class UnicycleSecondOrder(DynamicsBase):
         state[:, 2] = df.states.theta_0
         state[:, 3] = df.states.s_0
         state[:, 4] = df.states.phi_0
-        states: List[npt.NDArray] = [state]
+        states: list[npt.NDArray] = [state]
         for i in range(self.timesteps):
             state = self.step(state, actions[i], clip=True)
             states.append(state)

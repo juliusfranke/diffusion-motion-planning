@@ -15,11 +15,11 @@ class Dynamics(Enum):
     integrator2_3d = Integrator2_3D
 
 
-def get_dynamics(name: str, timesteps: int) -> DynamicsBase:
+def get_dynamics(name: str, timesteps: int, n_robots: int = 1) -> DynamicsBase:
     path = (diffmp.utils.DYN_CONFIG_PATH / name).with_suffix(".yaml")
     config = diffmp.utils.load_yaml(path)
     config["timesteps"] = timesteps
-    dyn = Dynamics[config["dynamics"]].value(**config, name=name)
+    dyn = Dynamics[config["dynamics"]].value(**config, name=name, n_robots=n_robots)
     return dyn
 
 

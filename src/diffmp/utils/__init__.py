@@ -32,6 +32,8 @@ from .dbcbs_ext import (
     DEFAULT_CONFIG,
 )
 
+from .h5_helpers import get_columns, get_array, get_string_array
+
 from .vec import mult_el_wise
 
 __all__ = [
@@ -60,4 +62,7 @@ __all__ = [
     "execute_task",
     "DEFAULT_CONFIG",
     "mult_el_wise",
+    "get_columns",
+    "get_array",
+    "get_string_array",
 ]

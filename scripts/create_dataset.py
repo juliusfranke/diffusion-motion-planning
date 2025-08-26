@@ -1,6 +1,7 @@
 from __future__ import annotations
 from collections import defaultdict
 import multiprocessing as mp
+from pathlib import Path
 import sys
 import random
 
@@ -15,8 +16,9 @@ import yaml
 import diffmp
 
 
-def split_solution(task: diffmp.utils.Task, lengths: list[int]):
-    dynamics = task.instance.robots[0].dynamics
+def split_solution(task: diffmp.utils.Task, lengths: list[int], robot_idx: int):
+    assert isinstance(task.instance, diffmp.problems.Instance)
+    dynamics = task.instance.robots[robot_idx].dynamics
     primitives = {
         length: {"actions": [], "states": [], "rel_l": [], "cost": [], "delta": []}
         for length in lengths
@@ -24,9 +26,10 @@ def split_solution(task: diffmp.utils.Task, lengths: list[int]):
     min_len = min(lengths)
     dataframes = {}
     for solution in task.solutions:
+        optimized = solution.optimized[robot_idx]
         i = 0
         rel_l_temp = defaultdict(list)
-        len_solution = len(solution.optimized.actions)
+        len_solution = len(optimized.actions)
         delta = solution.delta
         cost = len_solution / 10
         len_per = len_solution / len(lengths)
@@ -40,10 +43,10 @@ def split_solution(task: diffmp.utils.Task, lengths: list[int]):
             if len_solution - i < mp_len:
                 if mp_len == min_len:
                     primitives[mp_len]["actions"].append(
-                        solution.optimized.actions[-mp_len:].flatten()
+                        optimized.actions[-mp_len:].flatten()
                     )
                     primitives[mp_len]["states"].append(
-                        solution.optimized.states[-mp_len:].flatten()
+                        optimized.states[-mp_len:].flatten()
                     )
                     primitives[mp_len]["cost"].append(cost)
                     primitives[mp_len]["rel_l"].append(i / len_solution)
@@ -51,10 +54,10 @@ def split_solution(task: diffmp.utils.Task, lengths: list[int]):
                     break
                 continue
             primitives[mp_len]["actions"].append(
-                solution.optimized.actions[i : i + mp_len].flatten()
+                optimized.actions[i : i + mp_len].flatten()
             )
             primitives[mp_len]["states"].append(
-                solution.optimized.states[i : i + mp_len].flatten()
+                optimized.states[i : i + mp_len].flatten()
             )
             rel_l_temp[mp_len].append(i / len_solution)
             # primitives[mp_len]["rel_l"].append(i / len_solution)
@@ -75,7 +78,7 @@ def split_solution(task: diffmp.utils.Task, lengths: list[int]):
             continue
         data = [actions]
         columns = []
-        match dynamics:
+        match dynamics.name:
             case "unicycle1_v0":
                 for i in range(length):
                     columns.append(("actions", f"s_{i}"))
@@ -119,15 +122,16 @@ def split_solution(task: diffmp.utils.Task, lengths: list[int]):
     return dataframes
 
 
-def tasks_to_mp(tasks: list[diffmp.utils.Task], lengths: list[int]):
+def tasks_to_mp(tasks: list[diffmp.utils.Task], lengths: list[int], robot_idx: int):
     dataframes = defaultdict(list)
     primitives = {}
     for task in tasks:
-        task_dataframes = split_solution(task, lengths)
+        task_dataframes = split_solution(task, lengths, robot_idx)
         for length in lengths:
             if length not in task_dataframes.keys():
                 continue
             dataframes[length].append(task_dataframes[length])
+
     for length in lengths:
         df = pd.concat(dataframes[length])
         columns = list(df.columns)
@@ -145,47 +149,50 @@ def tasks_to_mp(tasks: list[diffmp.utils.Task], lengths: list[int]):
     return primitives
 
 
-def instances_to_df(instances: list[diffmp.problems.Instance]):
-    data = defaultdict(list)
-    for instance in instances:
-        data[("env", "name")].append(instance.name)
-        data[("env", "area")].append(instance.environment.area)
-        data[("env", "area_blocked")].append(instance.environment.area_blocked)
-        data[("env", "area_free")].append(instance.environment.area_free)
-        data[("env", "env_width")].append(instance.environment.env_width)
-        data[("env", "env_height")].append(instance.environment.env_height)
-        data[("env", "n_obstacles")].append(instance.environment.n_obstacles)
-        data[("env", "p_obstacles")].append(instance.environment.p_obstacles)
-        match instance.robots[0].dynamics:
-            case "unicycle1_v0":
-                data[("env", "theta_s")].append(instance.robots[0].start[2])
-                data[("env", "theta_g")].append(instance.robots[0].goal[2])
-            case "unicycle2_v0":
-                data[("env", "theta_s")].append(instance.robots[0].start[2])
-                data[("env", "theta_g")].append(instance.robots[0].goal[2])
-                data[("env", "s_s")].append(instance.robots[0].start[3])
-                data[("env", "s_g")].append(instance.robots[0].goal[3])
-                data[("env", "phi_s")].append(instance.robots[0].start[4])
-                data[("env", "phi_g")].append(instance.robots[0].goal[4])
-            case "car1_v0":
-                data[("env", "theta_s")].append(instance.robots[0].start[2])
-                data[("env", "theta_g")].append(instance.robots[0].goal[2])
-                data[("env", "theta_2_s")].append(instance.robots[0].start[3])
-                data[("env", "theta_2_g")].append(instance.robots[0].goal[3])
+# def instances_to_df(instances: list[diffmp.problems.Instance]):
+#     data = defaultdict(list)
+#     for instance in instances:
+#         data[("env", "name")].append(instance.name)
+#         data[("env", "area")].append(instance.environment.area)
+#         data[("env", "area_blocked")].append(instance.environment.area_blocked)
+#         data[("env", "area_free")].append(instance.environment.area_free)
+#         data[("env", "env_width")].append(instance.environment.env_width)
+#         data[("env", "env_height")].append(instance.environment.env_height)
+#         data[("env", "n_obstacles")].append(instance.environment.n_obstacles)
+#         data[("env", "p_obstacles")].append(instance.environment.p_obstacles)
+#         match instance.robots[0].dynamics:
+#             case "unicycle1_v0":
+#                 data[("env", "theta_s")].append(instance.robots[0].start[2])
+#                 data[("env", "theta_g")].append(instance.robots[0].goal[2])
+#             case "unicycle2_v0":
+#                 data[("env", "theta_s")].append(instance.robots[0].start[2])
+#                 data[("env", "theta_g")].append(instance.robots[0].goal[2])
+#                 data[("env", "s_s")].append(instance.robots[0].start[3])
+#                 data[("env", "s_g")].append(instance.robots[0].goal[3])
+#                 data[("env", "phi_s")].append(instance.robots[0].start[4])
+#                 data[("env", "phi_g")].append(instance.robots[0].goal[4])
+#             case "car1_v0":
+#                 data[("env", "theta_s")].append(instance.robots[0].start[2])
+#                 data[("env", "theta_g")].append(instance.robots[0].goal[2])
+#                 data[("env", "theta_2_s")].append(instance.robots[0].start[3])
+#                 data[("env", "theta_2_g")].append(instance.robots[0].goal[3])
 
-    df = pd.DataFrame(data)
-    multiindex = pd.MultiIndex.from_tuples(data.keys())
-    df.columns = multiindex
-    return df
+#     df = pd.DataFrame(data)
+#     multiindex = pd.MultiIndex.from_tuples(data.keys())
+#     df.columns = multiindex
+#     return df
 
 
 def main():
     trials = int(sys.argv[1])
     # trials = 1000
-    timelimit_db_astar = 3000
-    timelimit_db_cbs = 3000
+    timelimit_db_astar = 5000
+    timelimit_db_cbs = 5000
     lengths = [5, 10, 15, 20]
+    lengths = [10]
     dynamics = "unicycle1_v0"
+    n_robots = 2
+    # dynamics = ["unicycle1_v0", "unicycle1_v0"]
     # dynamics = "unicycle2_v0"
     # dynamics = "car1_v0"
     # results = {length: {"actions": [], "states": [], "cost": []} for length in lengths}
@@ -193,29 +200,37 @@ def main():
     data = {
         "delta_0": 0.5,
         "delta_rate": 0.9,
-        "num_primitives_0": 200,
+        "num_primitives_0": 100,
         "num_primitives_rate": 1.5,
         "alpha": 0.5,
         "filter_duplicates": True,
         "heuristic1": "reverse-search",
         "heuristic1_delta": 1.0,
-        "mp_path": f"../new_format_motions/{dynamics}/{dynamics}.msgpack",
+        "mp_path": [
+            f"../new_format_motions/{dynamics}/{dynamics}.msgpack"
+            for _ in range(n_robots)
+        ],
+        "execute_joint_optimization": True,
+        "execute_greedy_optimization": False,
+        "heuristic1_num_primitives_0": 100,
+        "always_add_node": False,
+        "rewire": True,
+        "residual_force": False,  # NN, augmented state or Ellipsoid shape
+        "suboptimality_factor": 1.3,  # 3.3, 2 - if Ellipsoid shape
     }
     if dynamics == "car1_v0":
         data["delta_0"] = 0.9
-    # random_instances = [
-    #     diffmp.problems.Instance.random(
-    #         6, 8, random.randint(4, 6), random.random() * (0.6 - 0.2) + 0.2, [dynamics]
-    #     )
-    #     for _ in range(50)
-    # ]
-    # n_random = 500
-    n_random = 10
+    n_random = 20
     random_instances = []
     pbar_0 = tqdm(total=n_random)
     for _ in range(n_random):
         instance = diffmp.problems.Instance.random(
-            6, 8, random.random() * (0.4 - 0.1) + 0.1, [dynamics], dim=diffmp.problems.Dim.TWO_D
+            5,
+            5,
+            random.random() * (0.4 - 0.1) + 0.1,
+            # 0.2,
+            [dynamics]*n_robots,
+            dim=diffmp.problems.Dim.TWO_D,
         )
         random_instances.append(instance)
         pbar_0.update()
@@ -223,11 +238,15 @@ def main():
     instances = random_instances
     configurations = [data]
     tasks = []
+    instance_dict = {}
+
     for instance in instances:
+        instance_data = instance.to_dict()
+        instance_dict[instance.name] = instance
         for configuration in configurations:
             tasks += [
                 diffmp.utils.Task(
-                    instance,
+                    instance_data,
                     configuration,
                     timelimit_db_astar,
                     timelimit_db_cbs,
@@ -238,6 +257,19 @@ def main():
     total = len(tasks)
     solved = 0
     failure = 0
+    # swap = diffmp.problems.Instance.from_yaml(Path("../example/swap2_unicycle.yaml"))
+    # tasks[0].instance = swap.to_dict()
+    # task = diffmp.utils.execute_task(tasks[0])
+    # result = task.solutions
+    # if len(result) > 0:
+    #     print(f"{len(result)=}")
+    #     traj_1 = np.array(result[-1].optimized[0].actions)
+    #     traj_2 = np.array(result[-1].optimized[1].actions)
+    #     # best_traj = result[-1].optimized[0].states
+    #     # print(np.array(best_traj[0].actions))
+    # else:
+    #     print("Failure")
+    # sys.exit()
     pbar = tqdm(total=total)
     pbar.set_postfix({"s": solved, "f": failure})
     solved_tasks = []
@@ -257,21 +289,44 @@ def main():
             pass
 
     pbar.close()
-    primitives = tasks_to_mp(solved_tasks, lengths)
+    solved_instances = set()
+    for task in solved_tasks:
+        task.instance = instance_dict[task.instance["name"]]
+        solved_instances.add(task.instance)
+    primitives = {length: [] for length in lengths}
+    for i in range(n_robots):
+        robot_primitives = tasks_to_mp(solved_tasks, lengths, i)
+        for length in lengths:
+            primitives[length].append(robot_primitives[length])
 
-    # instances_df = instances_to_df(instances)
-    instances_yaml = [yaml.dump(instance.to_dict()) for instance in instances]
+    instances_yaml = [yaml.dump(instance.to_dict()) for instance in solved_instances]
+    env_uuid = [instance.name for instance in solved_instances]
+    uuid_to_idx = {uuid: idx for idx, uuid in enumerate(env_uuid)}
 
-    for length, df in primitives.items():
-        filename = f"data/training_datasets/{dynamics}_l{length}.h5"
-        with h5py.File(filename, "w") as f:
-            f.create_dataset("scalars", data=df.to_numpy())
-            # pass
-        # dataset = df.merge(instances_df).drop(columns=("env", "name"))
-        # # print(dataset.env.describe())
-        # # print(dataset.misc.describe())
-        # print(length, dataset.shape)
-        # dataset.to_parquet(f"data/training_datasets/{dynamics}_l{length}.parquet")
+    filename = f"data/training_datasets/{dynamics}_x{n_robots}_.h5"
+    breakpoint()
+    with h5py.File(filename, "w") as f:
+        f.create_dataset("env_uuid", data=np.array(env_uuid, dtype="S36"))
+        f.create_dataset(
+            "environments",
+            data=np.array(instances_yaml, dtype=h5py.string_dtype("utf-8")),
+        )
+        for length, df_list in primitives.items():
+            group = f.create_group(f"length_{length:03}")
+
+            for robot_idx, df in enumerate(df_list):
+                robot_group = group.create_group(f"robot_{robot_idx:03}")
+                df[("env", "idx")] = df[("env", "name")].apply(lambda x: uuid_to_idx[x])
+                df.drop(columns=("env", "name"), inplace=True)
+                robot_group.create_dataset(
+                    "scalars",
+                    data=df.to_numpy(),
+                    chunks=True,
+                    compression="gzip",
+                )
+                columns = np.array([list(t) for t in df.columns.to_list()], dtype="S")
+                robot_group.create_dataset("columns", data=columns)
+            # group.create_dataset("env_ids", data=np.array(env_ids, dtype="S36"))
 
 
 if __name__ == "__main__":

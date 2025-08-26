@@ -1,17 +1,11 @@
 from functools import partial
-from typing import List, Sequence
+
 import numpy as np
 import numpy.typing as npt
 
-from diffmp.dynamics.base import DynamicsBase
-from diffmp.utils import (
-    CalculatedParameter,
-    DatasetParameter,
-    get_default_parameter_set,
-    ParameterSeq,
-)
-from diffmp.utils import Theta_to_theta, theta_to_Theta
-import pandas as pd
+import diffmp.utils as du
+
+from .base import DynamicsBase
 
 
 class CarWithTrailers(DynamicsBase):
@@ -23,7 +17,7 @@ class CarWithTrailers(DynamicsBase):
         max_steering_abs: float,
         l: float,
         num_trailers: float,
-        hitch_lengths: List[float],
+        hitch_lengths: list[float],
         dt: float,
         timesteps: int,
         name: str,
@@ -32,57 +26,57 @@ class CarWithTrailers(DynamicsBase):
         self.l = l
         self.num_trailers = num_trailers
         self.hitch_lengths = hitch_lengths
-        parameter_set = get_default_parameter_set()
+        parameter_set = du.get_default_parameter_set()
         actions_set = []
         for i in range(timesteps):
             actions_set.append(("actions", f"s_{i}"))
             actions_set.append(("actions", f"phi_{i}"))
-        regular_parameters: ParameterSeq = [
-            DatasetParameter("actions", 2 * timesteps, 0, actions_set),
-            DatasetParameter(
+        regular_parameters: du.ParameterSeq = [
+            du.DatasetParameter("actions", 2 * timesteps, 0, actions_set),
+            du.DatasetParameter(
                 "theta_0",
                 1,
                 0,
                 [("states", "theta_0")],
             ),
-            CalculatedParameter(
+            du.CalculatedParameter(
                 "Theta_0",
                 2,
                 0,
                 [("states", "Theta_0_x"), ("states", "Theta_0_y")],
                 ["theta_0"],
-                partial(theta_to_Theta, col1="states"),
-                partial(Theta_to_theta, col1="states"),
+                partial(du.theta_to_Theta, col1="states"),
+                partial(du.Theta_to_theta, col1="states"),
             ),
-            DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
-            DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
-            DatasetParameter("theta_2_s", 1, 0, [("env", "theta_2_s")]),
-            DatasetParameter("theta_2_g", 1, 0, [("env", "theta_2_g")]),
+            du.DatasetParameter("theta_s", 1, 0, [("env", "theta_s")]),
+            du.DatasetParameter("theta_g", 1, 0, [("env", "theta_g")]),
+            du.DatasetParameter("theta_2_s", 1, 0, [("env", "theta_2_s")]),
+            du.DatasetParameter("theta_2_g", 1, 0, [("env", "theta_2_g")]),
         ]
-        condition_parameters: ParameterSeq = [
-            CalculatedParameter(
+        condition_parameters: du.ParameterSeq = [
+            du.CalculatedParameter(
                 "Theta_s",
                 2,
                 0,
                 [("env", "Theta_s_x"), ("env", "Theta_s_y")],
                 ["theta_s"],
-                partial(theta_to_Theta, col1="env", i="s"),
-                partial(Theta_to_theta, col1="env", i="s"),
+                partial(du.theta_to_Theta, col1="env", i="s"),
+                partial(du.Theta_to_theta, col1="env", i="s"),
             ),
-            CalculatedParameter(
+            du.CalculatedParameter(
                 "Theta_g",
                 2,
                 0,
                 [("env", "Theta_g_x"), ("env", "Theta_g_y")],
                 ["theta_g"],
-                partial(theta_to_Theta, col1="env", i="g"),
-                partial(Theta_to_theta, col1="env", i="g"),
+                partial(du.theta_to_Theta, col1="env", i="g"),
+                partial(du.Theta_to_theta, col1="env", i="g"),
             ),
         ]
         q = ["x", "y", "theta"]
         if num_trailers == 1:
             regular_parameters.append(
-                DatasetParameter(
+                du.DatasetParameter(
                     "theta_2_0",
                     1,
                     0,
@@ -90,36 +84,36 @@ class CarWithTrailers(DynamicsBase):
                 )
             )
             regular_parameters.append(
-                CalculatedParameter(
+                du.CalculatedParameter(
                     "Theta_2_0",
                     2,
                     0,
                     [("states", "Theta_2_0_x"), ("states", "Theta_2_0_y")],
                     ["theta_2_0"],
-                    partial(theta_to_Theta, col1="states", i="2_0"),
-                    partial(Theta_to_theta, col1="states", i="2_0"),
+                    partial(du.theta_to_Theta, col1="states", i="2_0"),
+                    partial(du.Theta_to_theta, col1="states", i="2_0"),
                 ),
             )
             condition_parameters.append(
-                CalculatedParameter(
+                du.CalculatedParameter(
                     "Theta_2_s",
                     2,
                     0,
                     [("env", "Theta_2_s_x"), ("env", "Theta_2_s_y")],
                     ["theta_2_s"],
-                    partial(theta_to_Theta, col1="env", i="2_s"),
-                    partial(Theta_to_theta, col1="env", i="2_s"),
+                    partial(du.theta_to_Theta, col1="env", i="2_s"),
+                    partial(du.Theta_to_theta, col1="env", i="2_s"),
                 )
             )
             condition_parameters.append(
-                CalculatedParameter(
+                du.CalculatedParameter(
                     "Theta_2_g",
                     2,
                     0,
                     [("env", "Theta_2_g_x"), ("env", "Theta_2_g_y")],
                     ["theta_2_g"],
-                    partial(theta_to_Theta, col1="env", i="2_g"),
-                    partial(Theta_to_theta, col1="env", i="2_g"),
+                    partial(du.theta_to_Theta, col1="env", i="2_g"),
+                    partial(du.Theta_to_theta, col1="env", i="2_g"),
                 )
             )
             q.append("theta_2")
@@ -147,7 +141,7 @@ class CarWithTrailers(DynamicsBase):
             name=name,
         )
 
-    def random_state(self, **kwargs) -> List[float]:
+    def random_state(self, **kwargs) -> list[float]:
         state = super().random_state(**kwargs)
         if self.num_trailers == 1:
             state[3] = state[2]
@@ -200,7 +194,7 @@ class CarWithTrailers(DynamicsBase):
         state[:, 2] = df.states.theta_0
         if self.num_trailers == 1:
             state[:, 3] = df.states.theta_2_0
-        states: List[npt.NDArray] = [state]
+        states: list[npt.NDArray] = [state]
         for i in range(self.timesteps):
             state = self.step(state, actions[i], clip=True)
             states.append(state)

@@ -1,29 +1,25 @@
 from enum import Enum
+from typing import Optional
 
+import matplotlib.pyplot as plt
 import numpy as np
+
+from matplotlib.axes import Axes
+from meshlib.mrmeshnumpy import getNumpyFaces, getNumpyVerts
 from meshlib.mrmeshpy import (
-    AABBTree,
     AffineXf3f,
+    Mesh,
     MeshPart,
     Vector2f,
     Vector3f,
     findCollidingTriangles,
     findSignedDistance,
 )
-import matplotlib.pyplot as plt
 
-# from matplotlib.patches import Polygon
-from matplotlib.axes import Axes
-from mpl_toolkits.mplot3d.axes3d import Axes3D
-
-# from matplotlib.collections import PatchCollection
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from mpl_toolkits.mplot3d.axes3d import Axes3D
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
-from typing import Optional
-from meshlib.mrmeshpy import Mesh
-from meshlib.mrmeshnumpy import getNumpyVerts, getNumpyFaces
-import numpy as np
 
 
 class Dim(Enum):
@@ -150,35 +146,45 @@ def plot_3dmesh_to_2d(
 
 
 def _np_affine_from_mr(xf: AffineXf3f):
-    """Convert mr.AffineXf3f to (A, b) numpy arrays."""
     A = np.array([[xf.A[r][c] for c in range(3)] for r in range(3)], dtype=float)
     b = np.array([xf.b.x, xf.b.y, xf.b.z], dtype=float)
     return A, b
 
+
+def _mr_from_np(A: np.ndarray, b: np.ndarray) -> AffineXf3f:
+    xf = AffineXf3f()
+    for r in range(3):
+        for c in range(3):
+            xf.A[r][c] = float(A[r, c])
+    xf.b = Vector3f(float(b[0]), float(b[1]), float(b[2]))
+    return xf
+
+
+def _compose(A1, b1, A2, b2):
+    A = A1 @ A2
+    b = A1 @ b2 + b1
+    return A, b
+
+
 def _invert_rigid(A: np.ndarray, b: np.ndarray):
-    """Inverse of a rigid transform x' = A x + b (A is rotation)."""
     A_inv = A.T
     b_inv = -A_inv @ b
     return A_inv, b_inv
 
+
 def _signed_distance_pt_mesh(ptA: Vector3f, mp: MeshPart):
-    """
-    Call the point→mesh signed distance API and return a robust signed distance.
-    Handles field-name differences across MRMesh versions.
-    """
     sd = findSignedDistance(ptA, mp)  # SignedDistanceToMeshResult
 
-    # Try common attribute names first
     if hasattr(sd, "signedDist"):
         return float(sd.signedDist)
 
-    # Fallbacks
+    # TODO check what is correct
     dist = None
-    if hasattr(sd, "dist"):               # some versions expose 'dist'
+    if hasattr(sd, "dist"):  # some versions expose 'dist'
         dist = float(sd.dist)
-    elif hasattr(sd, "distance"):         # or 'distance'
+    elif hasattr(sd, "distance"):  # or 'distance'
         dist = float(sd.distance)
-    elif hasattr(sd, "distanceSq"):       # last resort: sqrt(distanceSq)
+    elif hasattr(sd, "distanceSq"):  # last resort: sqrt(distanceSq)
         dist = float(sd.distanceSq) ** 0.5
     else:
         dist = float("inf")
@@ -189,9 +195,18 @@ def _signed_distance_pt_mesh(ptA: Vector3f, mp: MeshPart):
 
     return sign * dist
 
+
 def _point_inside_or_on(pt: np.ndarray, mp: MeshPart, tol: float) -> bool:
     sdist = _signed_distance_pt_mesh(Vector3f(*pt), mp)
     return sdist <= tol
+
+def relative_transform(xf_a: AffineXf3f, xf_b: AffineXf3f) -> AffineXf3f:
+    A_a, b_a = _np_affine_from_mr(xf_a)
+    A_b, b_b = _np_affine_from_mr(xf_b)
+    A_a_inv, b_a_inv = _invert_rigid(A_a, b_a)
+    A_rel, b_rel = _compose(A_a_inv, b_a_inv, A_b, b_b)
+    return _mr_from_np(A_rel, b_rel)
+
 
 def meshes_collide(
     mesh_a: Mesh, mesh_b: Mesh, xf: AffineXf3f, tol: float = 1e-6
@@ -222,7 +237,7 @@ def meshes_collide(
 
     # 3) Any vertex of transformed B inside/on A?
     verts_b = getNumpyVerts(mesh_b)  # (Nb,3)
-    verts_b_in_A = (verts_b @ A.T) + b           # (Nb,3)
+    verts_b_in_A = (verts_b @ A.T) + b  # (Nb,3)
     for pA in verts_b_in_A:
         if _point_inside_or_on(pA, mp_a, tol):
             return True

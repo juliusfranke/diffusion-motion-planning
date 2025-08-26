@@ -1,11 +1,9 @@
-from dataclasses import dataclass
-import pandas as pd
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Sequence, Tuple, Optional
 from collections.abc import Callable
-import diffmp
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional, Sequence
 
-
+import pandas as pd
 import torch
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -29,9 +27,9 @@ class AnyStr:
 @dataclass
 class Parameter:
     name: str
-    size: int
+    # size: int
     weight: float
-    cols: List[Tuple[str, str]]
+    cols: list[tuple[str, str]]
 
 
 @dataclass
@@ -41,7 +39,7 @@ class DatasetParameter(Parameter):
 
 @dataclass
 class CalculatedParameter(Parameter):
-    requires: List[str]
+    requires: list[str]
     to: Callable[[pd.DataFrame], pd.DataFrame]
     fr: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
 
@@ -51,11 +49,11 @@ ParameterSeq = Sequence[DatasetParameter | CalculatedParameter]
 
 class ParameterSet:
     def __init__(self):
-        self.data_param_regular: List[DatasetParameter] = []
-        self.calc_param_regular: List[CalculatedParameter] = []
-        self.data_param_condition: List[DatasetParameter] = []
-        self.calc_param_condition: List[CalculatedParameter] = []
-        self.required: List[DatasetParameter] = []
+        self.data_param_regular: list[DatasetParameter] = []
+        self.calc_param_regular: list[CalculatedParameter] = []
+        self.data_param_condition: list[DatasetParameter] = []
+        self.calc_param_condition: list[CalculatedParameter] = []
+        self.required: list[DatasetParameter] = []
 
     def add_parameter(
         self, parameter: DatasetParameter | CalculatedParameter, condition: bool
@@ -85,7 +83,7 @@ class ParameterSet:
     def set_weight(self, parameter_name: str, weight: float) -> None:
         self[parameter_name].weight = weight
 
-    def get_columns(self) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    def get_columns(self) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         col_reg = []
         col_cond = []
 
@@ -136,7 +134,7 @@ class ParameterSet:
             + sorted(self.calc_param_condition, key=lambda p: p.name)
         )
 
-    def in_out_size(self) -> Tuple[int, int]:
+    def in_out_size(self) -> tuple[int, int]:
         out_size = len(self.data_param_regular) + len(self.calc_param_regular)
         in_size = (
             out_size + len(self.data_param_condition) + len(self.calc_param_condition)
@@ -172,20 +170,19 @@ def get_default_parameter_set() -> ParameterSet:
     param_set = ParameterSet()
     param_set.add_parameters(
         [
-            DatasetParameter("area", 1, 0, [("env", "area")]),
-            DatasetParameter("area_blocked", 1, 0, [("env", "area_blocked")]),
-            DatasetParameter("area_free", 1, 0, [("env", "area_free")]),
-            DatasetParameter("env_width", 1, 0, [("env", "env_width")]),
-            DatasetParameter("env_height", 1, 0, [("env", "env_height")]),
-            DatasetParameter("n_obstacles", 1, 0, [("env", "n_obstacles")]),
-            DatasetParameter("p_obstacles", 1, 0, [("env", "p_obstacles")]),
-            DatasetParameter("delta_0", 1, 0, [("misc", "delta_0")]),
-            DatasetParameter("cost", 1, 0, [("misc", "cost")]),
-            DatasetParameter("rel_l", 1, 0, [("misc", "rel_l")]),
-            DatasetParameter("count", 1, 0, [("misc", "count")]),
-            CalculatedParameter(
-                "rel_p", 1, 1, [("misc", "rel_p")], ["count"], calc_rel_p
-            ),
+            DatasetParameter("area", 0, [("env", "area")]),
+            DatasetParameter("area_blocked", 0, [("env", "area_blocked")]),
+            DatasetParameter("area_free", 0, [("env", "area_free")]),
+            DatasetParameter("env_width", 0, [("env", "env_width")]),
+            DatasetParameter("env_height", 0, [("env", "env_height")]),
+            DatasetParameter("n_obstacles", 0, [("env", "n_obstacles")]),
+            DatasetParameter("p_obstacles", 0, [("env", "p_obstacles")]),
+            DatasetParameter("delta_0", 0, [("misc", "delta_0")]),
+            DatasetParameter("cost", 0, [("misc", "cost")]),
+            DatasetParameter("rel_l", 0, [("misc", "rel_l")]),
+            DatasetParameter("count", 0, [("misc", "count")]),
+            DatasetParameter("robot_id", 0, [("misc", "robot_idx")]),
+            CalculatedParameter("rel_p", 1, [("misc", "rel_p")], ["count"], calc_rel_p),
         ],
         condition=True,
     )

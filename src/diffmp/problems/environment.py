@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from copy import copy
 import random
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,7 +20,8 @@ from meshlib.mrmeshpy import (
 )
 from shapely.geometry import Polygon
 
-from diffmp.utils import mult_el_wise
+import diffmp.utils as du
+import diffmp.torch as to
 
 from .etc import (
     Bounds,
@@ -30,11 +30,13 @@ from .etc import (
     plot_3dmesh_to_2d,
     set_axes_equal,
     meshes_collide,
+    relative_transform,
 )
 from .obstacle import BoxObstacle, Obstacle
 
 if TYPE_CHECKING:
     from diffmp.dynamics.base import DynamicsBase
+    from diffmp.problems.robots import Robot
 
 
 class Environment:
@@ -52,55 +54,53 @@ class Environment:
         assert env_min.z <= env_max.z
 
         self.obstacles = obstacles
-        self.min = env_min
-        self.max = env_max
-        self.size = env_max - env_min
+        size = env_max - env_min
 
-        max_size = max(self.size)
-        boundary_border_size = (
-            self.size - Vector3f(1, 1, 1) * max_size
-        ) / 2 - Vector3f(1, 1, 1)
-        boundary_size = self.size - 3 * boundary_border_size
-        # breakpoint()
-        if self.size.z == 0:
+        max_size = max(size)
+        boundary_border_size = (size - Vector3f(1, 1, 1) * max_size) / 2 - Vector3f(
+            1, 1, 1
+        )
+        boundary_size = size - 3 * boundary_border_size
+        if size.z == 0:
             self.dim = Dim.TWO_D
-            self.min.z = -0.5
-            self.max.z = 0.5
+            env_min.z = -0.5
+            env_max.z = 0.5
             boundary_size.z = 0.98
             boundary_border_size.z = 0
             xf_area = AffineXf3f.xfAround(
-                Matrix3f.scale(self.size.x, self.size.y, 1), stable=Vector3f(self.min)
+                Matrix3f.scale(size.x, size.y, 1), stable=Vector3f(env_min)
             )
             xf_boundary = AffineXf3f.xfAround(
                 Matrix3f.scale(boundary_size),
-                stable=Vector3f(self.min + boundary_border_size),
+                stable=Vector3f(env_min + boundary_border_size),
             )
 
         else:
             self.dim = Dim.THREE_D
             xf_area = AffineXf3f.xfAround(
-                Matrix3f.scale(self.size), stable=Vector3f(self.min)
+                Matrix3f.scale(size), stable=Vector3f(env_min)
             )
             xf_boundary = AffineXf3f.xfAround(
                 Matrix3f.scale(boundary_size),
-                stable=Vector3f(self.min + boundary_border_size),
+                stable=Vector3f(env_min + boundary_border_size),
             )
-        self.area_mesh = makeCube(base=self.min)
+        self.area_mesh = makeCube(base=env_min)
         self.area_mesh.transform(xf_area)
         self.area_aabb = self.area_mesh.getBoundingBox()
 
-        b_mesh = makeCube(base=self.min + boundary_border_size)
+        b_mesh = makeCube(base=env_min + boundary_border_size)
         b_mesh.transform(xf_boundary)
         self.boundary_mesh = boolean(
             b_mesh, self.area_mesh, BooleanOperation.DifferenceAB
         ).mesh
-        # print(f"{self.size=}")
-        # print(f"{b_mesh.volume()=}")
-        # print(f"{self.area_mesh.volume()=}")
-        # print(f"{self.boundary_mesh.volume()=}")
 
-        self.area = self.size.x * self.size.y
-        self.volume = self.area * self.size.z
+        self.area = size.x * size.y
+        self.volume = self.area * size.z
+        self.min = tuple(env_min)
+        self.max = tuple(env_max)
+        self.size = tuple(size)
+        self.env_width = self.size[0]
+        self.env_height = self.size[1]
 
         self.update()
 
@@ -115,6 +115,7 @@ class Environment:
         ).mesh
 
         self.area_blocked = self.blocked_mesh.projArea(Vector3f(0, 0, 1))
+        self.area_free = self.area - self.area_blocked
         self.volume_blocked = self.blocked_mesh.volume()
         self.n_obstacles = len(self.obstacles)
         if self.dim == Dim.TWO_D:
@@ -129,10 +130,10 @@ class Environment:
     def plot2d(self, ax: Axes):
         environment = Polygon(
             (
-                (self.min.x, self.min.y),
-                (self.max.x, self.min.y),
-                (self.max.x, self.max.y),
-                (self.min.x, self.max.y),
+                (self.min[0], self.min[1]),
+                (self.max[0], self.min[1]),
+                (self.max[0], self.max[1]),
+                (self.min[0], self.max[1]),
             )
         )
         xs, ys = environment.exterior.xy
@@ -203,9 +204,10 @@ class Environment:
     def discretize_sd(self, n: int) -> npt.NDArray[np.floating]:
         Nx, Ny, Nz = n, n, n
         s_max = max(self.size)
-        xs = np.linspace(self.min.x, s_max, n)
-        ys = np.linspace(self.min.y, s_max, n)
-        zs = np.linspace(self.min.z, s_max, n)
+        d = (s_max / n) / 2
+        xs = np.linspace(0+d, s_max-d, n)
+        ys = np.linspace(0+d, s_max-d, n)
+        zs = np.linspace(0+d, s_max-d, n)
         # breakpoint()
         if self.dim == Dim.TWO_D:
             zs = np.array([0])
@@ -242,20 +244,53 @@ class Environment:
     def discretize_percent(self, n: int) -> npt.NDArray[np.floating]:
         return np.array([])
 
+    def discretize(
+        self, discretize_config: to.DiscretizeConfig
+    ) -> npt.NDArray[np.floating]:
+        match discretize_config.method:
+            case "sd":
+                return self.discretize_sd(discretize_config.resolution)
+            case "percent":
+                return self.discretize_percent(discretize_config.resolution)
+
     def random_free(
-        self, robot_dynamics: DynamicsBase, max_tries: int = 1000
+        self,
+        robot_dynamics: DynamicsBase,
+        other_robots: list[Robot],
+        max_tries: int = 1000,
     ) -> Optional[list[float]]:
         for _ in range(max_tries):
             px, py, pz = np.random.random(size=3)
-            pos = mult_el_wise(Vector3f(px, py, pz), self.max - self.min) + self.min
+            pos = du.mult_el_wise(
+                Vector3f(px, py, pz), Vector3f(*self.max) - Vector3f(*self.min)
+            ) + Vector3f(*self.min)
 
             start = robot_dynamics.random_state(x=pos.x, y=pos.y, z=pos.z)
             xf = robot_dynamics.tf_from_state(np.array(start))
             robot_aabb = robot_dynamics.mesh.computeBoundingBox(xf)
+            # Check if robot mesh is completely inside environment bounds
             in_env = self.area_aabb.contains(robot_aabb)
             if not in_env:
                 continue
-            if not meshes_collide(self.blocked_mesh, robot_dynamics.mesh, xf):
+            # Check if robot mesh is colliding with obstacles
+            if meshes_collide(self.blocked_mesh, robot_dynamics.mesh, xf):
+                continue
+            for other_robot in other_robots:
+                xf_start = other_robot.dynamics.tf_from_state(
+                    np.array(other_robot.start)
+                )
+                xf_goal = other_robot.dynamics.tf_from_state(np.array(other_robot.goal))
+                xf_start_rel = relative_transform(xf_start, xf)
+                xf_goal_rel = relative_transform(xf_goal, xf)
+                if meshes_collide(
+                    robot_dynamics.mesh, other_robot.dynamics.mesh, xf_start_rel
+                ):
+                    break
+                if meshes_collide(
+                    robot_dynamics.mesh, other_robot.dynamics.mesh, xf_goal_rel
+                ):
+                    break
+            else:
                 return start
         return None
 
@@ -263,15 +298,20 @@ class Environment:
     def from_dict(
         cls, data: dict[str, list[float] | list[int | dict[str, Any]]]
     ) -> Environment:
-        assert isinstance(data["min"], list) and len(data["min"]) == 2
-        assert isinstance(data["max"], list) and len(data["max"]) == 2
-        min = cast(tuple[float, float], data["min"])
-        max = cast(tuple[float, float], data["max"])
+        assert isinstance(data["min"], list)
+        assert isinstance(data["max"], list)
+        assert len(data["min"]) == len(data["max"])
+        if len(data["min"]) == 2:
+            min = Vector3f(*data["min"], 0)
+            max = Vector3f(*data["max"], 0)
+        else:
+            min = Vector3f(*data["min"])
+            max = Vector3f(*data["max"])
 
         assert isinstance(data["obstacles"], list)
 
         obstacles = [
-            obstacle_from_dict(obstacle)
+            BoxObstacle.from_dict(obstacle)
             for obstacle in data["obstacles"]
             if isinstance(obstacle, dict)
         ]
@@ -291,7 +331,7 @@ class Environment:
             env_max.z = int(np.random.random() * (max_size - min_size) + min_size)
 
         env_bounds = Bounds(env_min, env_max)
-        print(f"{env_bounds.min=}")
+        # print(f"{env_bounds.min=}")
         env = cls(obstacles=[], env_min=Vector3f(env_min), env_max=Vector3f(env_max))
         ob_small_side = 0.2
         ob_min = env_max / 10
@@ -332,7 +372,6 @@ class Environment:
             )
             ob_bounds = [orient_xy, orient_yz, orient_xz, no_orient]
 
-        print(f"{env_bounds.min=}")
         while env.p_obstacles < p_obstacles:
             size_bounds = random.choice(ob_bounds)
             obstacle = BoxObstacle.random(

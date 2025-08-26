@@ -1,18 +1,21 @@
 from __future__ import annotations
-import ast
 import numpy as np
+import ast
+import h5py
 import numpy.typing as npt
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
-import pyarrow.parquet as pq
 import torch
 import yaml
 
 import diffmp
 
+import diffmp.problems as pb
+import diffmp.torch as to
 from .config import ParameterSet
+from .h5_helpers import get_columns, get_array, get_string_array
 
 if TYPE_CHECKING:
     from diffmp.torch import Config
@@ -31,7 +34,6 @@ def load_yaml(path: Path) -> dict[Any, Any]:
 
 def param_to_col(
     parameter_set: ParameterSet,
-    available_columns: list[tuple[str, str]],
 ) -> list[str]:
     cols: list[str] = []
     for param in parameter_set.iter_data():
@@ -39,20 +41,103 @@ def param_to_col(
     return cols
 
 
+def load_from_instances(
+    instances: list[pb.Instance], columns: list[tuple[str, str]], n_robots: int
+) -> pd.DataFrame:
+    data = {}
+    for column in columns:
+        data[column] = []
+        for instance in instances:
+            match column[1]:
+                case "area":
+                    data[column].append(instance.environment.area)
+                case "x_s":
+                    robot_idx = int(column[0][6:])
+                    data[column].append(instance.robots[robot_idx].start[0])
+                case "x_g":
+                    robot_idx = int(column[0][6:])
+                    data[column].append(instance.robots[robot_idx].goal[0])
+                case "y_s":
+                    robot_idx = int(column[0][6:])
+                    data[column].append(instance.robots[robot_idx].start[1])
+                case "y_g":
+                    robot_idx = int(column[0][6:])
+                    data[column].append(instance.robots[robot_idx].goal[1])
+                case "theta_s":
+                    robot_idx = int(column[0][6:])
+                    data[column].append(instance.robots[robot_idx].start[2])
+                case "theta_g":
+                    robot_idx = int(column[0][6:])
+                    data[column].append(instance.robots[robot_idx].goal[2])
+    data[("env", "idx")] = [i for i in range(len(instances))]
+    df = pd.DataFrame(data)
+    return df
+
+
+def discretize_instances(
+    instances: list[pb.Instance], discretize_config: to.DiscretizeConfig
+) -> torch.Tensor:
+    dim = instances[0].environment.dim
+    n = discretize_config.resolution
+    dis_tensor = torch.empty((len(instances), n, n))
+    for i, instance in enumerate(instances):
+        dis = torch.Tensor(instance.environment.discretize(discretize_config))
+        if dim == pb.Dim.TWO_D:
+            dis = dis.reshape(n, n)
+        dis_tensor[i] = dis
+    return dis_tensor
+
+
 def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     parameter_set = config.dynamics.parameter_set
 
-    metadata = pq.read_table(config.dataset)
-    available_columns: list[tuple[str, str]] = [
-        ast.literal_eval(col) for col in metadata.column_names
-    ]
+    load_columns = param_to_col(parameter_set)
+    load_columns = [ast.literal_eval(col) for col in load_columns]
+    load_columns += [("misc", "rel_c"), ("env", "idx")]
+    with h5py.File(config.dataset, "r") as f:
+        env_strings = get_string_array(f, "environments")
 
-    load_columns = param_to_col(parameter_set, available_columns) + [
-        str(("misc", "rel_c"))
-    ]
+        length_group = f.get(f"length_{config.timesteps:03}")
+        assert isinstance(length_group, h5py.Group)
+        instance_columns = []
+        scalar_columns = []
+        scalar_arrays = []
+        # ar = np.array([])
+        for i in range(config.n_robots):
+            robot_group = length_group.get(f"robot_{i:03}")
+            assert isinstance(robot_group, h5py.Group)
 
-    dataset = pd.read_parquet(config.dataset, columns=load_columns)
-    # print(dataset.shape[0])
+            dataset_columns = get_columns(robot_group)
+            scalar_cols_idxs: list[int] = []
+            instance_columns: list[tuple[str, str]] = []
+            scalar_columns: list[tuple[str, str]] = []
+
+            for column in load_columns:
+                if column == ("misc", "robot_idx"):
+                    continue
+                if column[0] == "env" and column[1] != "idx":
+                    instance_columns.append(column)
+                    continue
+                if column[0][:5] == "robot":
+                    instance_columns.append(column)
+                    continue
+                scalar_columns.append(column)
+                if column not in dataset_columns:
+                    raise Exception(f"Col {column} not in dataset")
+                scalar_cols_idxs.append(dataset_columns.index(column))
+            scalar_arrays.append(get_array(robot_group)[:, scalar_cols_idxs])
+
+    instances = [pb.Instance.from_dict(yaml.safe_load(data)) for data in env_strings]
+    instance_dataset = load_from_instances(instances, instance_columns, config.n_robots)
+    pds = [
+        pd.DataFrame(data, columns=pd.MultiIndex.from_tuples(scalar_columns))
+        for data in scalar_arrays
+    ]
+    for i in range(config.n_robots):
+        pds[i][("misc", "robot_idx")] = i
+    scalar_dataset = pd.concat(pds)
+    # scalar_dataset = pd.DataFrame(ar, columns=pd.MultiIndex.from_tuples(scalar_columns))
+    dataset = scalar_dataset.merge(instance_dataset)
     dataset = calc_param(parameter_set, dataset)
 
     [dataset.drop(columns=p.cols, inplace=True) for p in parameter_set.required]
@@ -68,10 +153,28 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     reg_cols, cond_cols = parameter_set.get_columns()
     regular = dataset[reg_cols]
     conditioning = dataset[cond_cols]
+    # print(f"{reg_cols=}")
+    print(f"{pd.MultiIndex.from_tuples(cond_cols)=}")
     regular = torch.tensor(regular.to_numpy(), device=diffmp.utils.DEVICE)
     conditioning = torch.tensor(conditioning.to_numpy(), device=diffmp.utils.DEVICE)
+    if config.discretize is not None:
+        dis = discretize_instances(instances, config.discretize)
+        dis = dis.reshape(dis.shape[0], 1, dis.shape[1], dis.shape[2])
+        dis.to(diffmp.utils.DEVICE)
+    else:
+        dis = None
+    if config.robot_embedding:
+        row_to_id = torch.tensor(scalar_dataset[("misc", "robot_idx")].to_numpy(), dtype=torch.int)
+    else:
+        row_to_id = None
 
-    return diffmp.torch.DiffusionDataset(regular=regular, conditioning=conditioning)
+    return diffmp.torch.DiffusionDataset(
+        regular=regular,
+        conditioning=conditioning,
+        discretized=dis,
+        row_to_env=dataset[("env", "idx")].to_numpy(),
+        row_to_id=row_to_id,
+    )
 
 
 def calc_param(
@@ -84,29 +187,55 @@ def calc_param(
 
 
 def condition_for_sampling(
-    config: diffmp.torch.Config, n_samples: int, instance: diffmp.problems.Instance
+    config: diffmp.torch.Config,
+    n_samples: int,
+    instance: diffmp.problems.Instance,
+    robot_idx: int,
 ) -> torch.Tensor:
     data: dict[tuple[str, str], npt.NDArray] = {}
-    # for condition in config.dynamics.parameter_set:
+    n_robots = len(instance.robots)
     for condition in config.dynamics.parameter_set.iter_condition():
-        # if condition not in config.conditioning:
-        #     continue
         match condition.name:
+            case "robot_id":
+                data[("misc", "robot_idx")] = np.ones(n_samples) * robot_idx
+            case "x_s":
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "x_s")] = (
+                        np.ones(n_samples) * instance.robots[i].start[0]
+                    )
+            case "x_g":
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "x_g")] = (
+                        np.ones(n_samples) * instance.robots[i].goal[0]
+                    )
+            case "y_s":
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "y_s")] = (
+                        np.ones(n_samples) * instance.robots[i].start[1]
+                    )
+            case "y_g":
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "y_g")] = (
+                        np.ones(n_samples) * instance.robots[i].goal[1]
+                    )
             case "theta_s":
-                data[("env", "theta_s")] = (
-                    np.ones(n_samples) * instance.robots[0].start[2]
-                )
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "theta_s")] = (
+                        np.ones(n_samples) * instance.robots[i].start[2]
+                    )
             case "theta_2_s":
                 data[("env", "theta_2_s")] = (
                     np.ones(n_samples) * instance.robots[0].start[3]
                 )
             case "Theta_s":
-                data[("env", "Theta_s_x")] = np.ones(n_samples) * np.cos(
-                    instance.robots[0].start[2]
-                )
-                data[("env", "Theta_s_y")] = np.ones(n_samples) * np.sin(
-                    instance.robots[0].start[2]
-                )
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "Theta_s_x")] = np.ones(n_samples) * np.cos(
+                        instance.robots[i].start[2]
+                    )
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "Theta_s_y")] = np.ones(n_samples) * np.sin(
+                        instance.robots[i].start[2]
+                    )
             case "Theta_2_s":
                 data[("env", "Theta_2_s_x")] = np.ones(n_samples) * np.cos(
                     instance.robots[0].start[3]
@@ -115,12 +244,14 @@ def condition_for_sampling(
                     instance.robots[0].start[3]
                 )
             case "Theta_g":
-                data[("env", "Theta_g_x")] = np.ones(n_samples) * np.cos(
-                    instance.robots[0].goal[2]
-                )
-                data[("env", "Theta_g_y")] = np.ones(n_samples) * np.sin(
-                    instance.robots[0].goal[2]
-                )
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "Theta_g_x")] = np.ones(n_samples) * np.cos(
+                        instance.robots[i].goal[2]
+                    )
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "Theta_g_y")] = np.ones(n_samples) * np.sin(
+                        instance.robots[i].goal[2]
+                    )
             case "Theta_2_g":
                 data[("env", "Theta_2_g_x")] = np.ones(n_samples) * np.cos(
                     instance.robots[0].goal[3]
@@ -129,9 +260,10 @@ def condition_for_sampling(
                     instance.robots[0].goal[3]
                 )
             case "theta_g":
-                data[("env", "theta_g")] = (
-                    np.ones(n_samples) * instance.robots[0].goal[2]
-                )
+                for i in range(n_robots):
+                    data[(f"robot_{i:03}", "theta_g")] = (
+                        np.ones(n_samples) * instance.robots[i].goal[2]
+                    )
             case "theta_2_g":
                 data[("env", "theta_2_g")] = (
                     np.ones(n_samples) * instance.robots[0].goal[3]
@@ -188,18 +320,32 @@ def condition_for_sampling(
                 )
 
     df = pd.DataFrame(data)
+    # print(df.columns)
+    # breakpoint()
 
     return torch.tensor(df.to_numpy(), device=diffmp.utils.DEVICE)
 
 
-def theta_to_Theta(df: pd.DataFrame, col1: str, i: str = "0") -> pd.DataFrame:
-    df[(col1, f"Theta_{i}_x")] = np.cos(df[(col1, f"theta_{i}")])
-    df[(col1, f"Theta_{i}_y")] = np.sin(df[(col1, f"theta_{i}")])
+def theta_to_Theta(
+    df: pd.DataFrame, col1: str | list[str], i: str = "0"
+) -> pd.DataFrame:
+    if isinstance(col1, str):
+        col1 = [col1]
+
+    for c1 in col1:
+        df[(c1, f"Theta_{i}_x")] = np.cos(df[(c1, f"theta_{i}")])
+        df[(c1, f"Theta_{i}_y")] = np.sin(df[(c1, f"theta_{i}")])
     return df
 
 
-def Theta_to_theta(df: pd.DataFrame, col1: str, i: str = "0") -> pd.DataFrame:
-    df[(col1, f"theta_{i}")] = np.atan2(
-        df[(col1, f"Theta_{i}_y")], df[(col1, f"Theta_{i}_x")]
-    )
+def Theta_to_theta(
+    df: pd.DataFrame, col1: str | list[str], i: str = "0"
+) -> pd.DataFrame:
+    if isinstance(col1, str):
+        col1 = [col1]
+
+    for c1 in col1:
+        df[(c1, f"theta_{i}")] = np.atan2(
+            df[(c1, f"Theta_{i}_y")], df[(c1, f"Theta_{i}_x")]
+        )
     return df

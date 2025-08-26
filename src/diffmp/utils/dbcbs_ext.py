@@ -1,14 +1,18 @@
 from __future__ import annotations
-import diffmp
-import yaml
-from pathlib import Path
+
+import tempfile
+import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+import dbcbs_py
+import msgpack
 import numpy as np
 import numpy.typing as npt
-from typing import List, Dict
-import tempfile
-import dbcbs_py
+import yaml
 
+import diffmp
 
 DEFAULT_CONFIG = {
     "delta_0": 0.5,
@@ -19,6 +23,13 @@ DEFAULT_CONFIG = {
     "filter_duplicates": True,
     "heuristic1": "reverse-search",
     "heuristic1_delta": 1.0,
+    "execute_joint_optimization": True,
+    "execute_greedy_optimization": False,
+    "heuristic1_num_primitives_0": 100,
+    "always_add_node": False,
+    "rewire": True,
+    "residual_force": False,
+    "suboptimality_factor": 1.3,
 }
 
 
@@ -36,19 +47,26 @@ class Trajectory:
 
 @dataclass
 class Solution:
-    discrete: Trajectory
-    optimized: Trajectory
+    discrete: list[Trajectory]
+    optimized: list[Trajectory]
     runtime: float
     delta: float
     cost: float
 
     @classmethod
     def from_db_cbs(cls, db_cbs_solution: dbcbs_py.Result) -> Solution:
-        discrete = Trajectory.from_db_cbs(db_cbs_solution.discrete.trajectories[0])
-        optimized = Trajectory.from_db_cbs(db_cbs_solution.optimized.trajectories[0])
+        discrete = [
+            Trajectory.from_db_cbs(traj)
+            for traj in db_cbs_solution.discrete.trajectories
+        ]
+        optimized = [
+            Trajectory.from_db_cbs(traj)
+            for traj in db_cbs_solution.optimized.trajectories
+        ]
         runtime = db_cbs_solution.runtime
         delta = db_cbs_solution.delta
-        cost = discrete.actions.shape[0] / 10
+
+        cost = sum([d.actions.shape[0] / 10 for d in optimized])
         return cls(
             discrete=discrete,
             optimized=optimized,
@@ -60,8 +78,8 @@ class Solution:
 
 @dataclass
 class Task:
-    instance: diffmp.problems.Instance
-    config: Dict
+    instance: diffmp.problems.Instance | dict
+    config: dict
     timelimit_db_astar: float
     timelimit_db_cbs: float
     solutions: list[Solution]
@@ -70,12 +88,14 @@ class Task:
 def execute_task(task: Task) -> Task:
     tmp1 = tempfile.NamedTemporaryFile()
     tmp2 = tempfile.NamedTemporaryFile()
-    if isinstance(task.instance.data, dict):
+    if isinstance(task.instance, dict):
+        instance_data = task.instance
+    elif isinstance(task.instance.data, dict):
         instance_data = task.instance.data
     else:
         instance_data = task.instance.to_dict()
     try:
-        results = dbcbs_py.db_cbs(
+        results = dbcbs_py.db_ecbs(
             instance_data,
             tmp1.name,
             tmp2.name,
@@ -85,26 +105,52 @@ def execute_task(task: Task) -> Task:
         )
     except IndexError:
         results = []
-    breakpoint()
-    task.solutions = [Solution.from_db_cbs(sol) for sol in results]
+    except RuntimeError:
+        results = []
+    task.solutions = [
+        Solution.from_db_cbs(sol)
+        for sol in results
+        if len(sol.optimized.trajectories) > 0
+    ]
 
     tmp1.close()
     tmp2.close()
     return task
 
 
-def out_to_mps(actions: npt.NDArray, states: npt.NDArray):
+def out_to_mps(
+    actions: npt.NDArray, states: npt.NDArray, fmt: Literal["yaml", "msgpack"]
+):
     length = actions.shape[1]
-    mps = []
-    # breakpoint()
-    for i in range(length):
-        mp = {
-            "start": states[0, i, :].tolist(),
-            "goal": states[-1, i, :].tolist(),
-            "actions": actions[:, i, :].tolist(),
-            "states": states[:, i, :].tolist(),
+    if fmt == "yaml":
+        mps = [
+            {
+                "start": states[0, i, :].tolist(),
+                "goal": states[-1, i, :].tolist(),
+                "actions": actions[:, i, :].tolist(),
+                "states": states[:, i, :].tolist(),
+            }
+            for i in range(length)
+        ]
+    elif fmt == "msgpack":
+        mps = {
+            "data": [
+                {
+                    "actions": actions[:, i, :].tolist(),
+                    "states": states[:, i, :].tolist(),
+                }
+                for i in range(length)
+            ]
         }
-        mps.append(mp)
+    # mps = []
+    # for i in range(length):
+    #     mp = {
+    #         "start": states[0, i, :].tolist(),
+    #         "goal": states[-1, i, :].tolist(),
+    #         "actions": actions[:, i, :].tolist(),
+    #         "states": states[:, i, :].tolist(),
+    #     }
+    #     mps.append(mp)
     return mps
 
 
@@ -113,15 +159,32 @@ def export(
     instance: diffmp.problems.Instance,
     out_path: Path,
     n_mp: int = 100,
+    robot_idx: int = 0,
 ) -> None:
-    out = diffmp.torch.sample(model, n_mp, instance).detach().cpu().numpy()
+    fmt = "yaml" if out_path.suffix == ".yaml" else "msgpack"
+    # time1 = time.perf_counter()
+    out = diffmp.torch.sample(model, n_mp, instance, robot_idx).detach().cpu().numpy()
+    if np.isnan(out).any():
+        print("WARNING: Output contains NaN")
+        out = np.nan_to_num(out)
 
     mps = model.dynamics.to_mp(out)
-    dbcbs_mps = out_to_mps(mps["actions"], mps["states"])
+    dbcbs_mps = out_to_mps(mps["actions"], mps["states"], fmt)
+
+    # time2 = time.perf_counter()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as file:
-        yaml.safe_dump(dbcbs_mps, file, default_flow_style=None)
+    if fmt == "yaml":
+        with open(out_path, "w") as file:
+            yaml.safe_dump(dbcbs_mps, file, default_flow_style=None)
+    else:
+        with open(out_path, "wb") as file:
+            packed = msgpack.packb(dbcbs_mps)
+            file.write(packed)  # type:ignore
+
+    # time3 = time.perf_counter()
+
+    # print(f"Gen: {time2 - time1} - Save: {time3 - time2}")
 
 
 def distribute_motion_primitives(total_count, lengths):

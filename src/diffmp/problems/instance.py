@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
-from matplotlib.axes import Axes
+
 import matplotlib.pyplot as plt
 import yaml
+from matplotlib.axes import Axes
 
 import diffmp
 from diffmp.problems.etc import Dim
 
 from .environment import Environment
-from .robots import Robot
 from .etc import set_axes_equal
+from .robots import Robot
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,11 +25,11 @@ class Baseline:
     duration: float
     cost: float
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {"success": self.success, "duration": self.duration, "cost": self.cost}
 
     @classmethod
-    def from_dict(cls, data: Dict) -> Baseline:
+    def from_dict(cls, data: dict) -> Baseline:
         return cls(data["success"], data["duration"], data["cost"])
 
 
@@ -42,12 +43,16 @@ class Instance:
     results: Optional[list[Baseline]] = None
 
     def plot(self, ax: Optional[Axes] = None) -> None:
+        n = len(self.robots)
+        cmap = plt.cm.get_cmap("Set3", n)  # or "Set3", "tab10", etc.
+        cmap = [cmap(i) for i in range(n)]
         match self.environment.dim:
             case Dim.TWO_D:
                 if ax is None:
                     fig, ax = plt.subplots(1)
                 self.environment.plot2d(ax)
-                self.robots[0].plot2d(ax)
+                for i, robot in enumerate(self.robots):
+                    robot.plot2d(ax, cmap[i])
                 ax.autoscale()
                 ax.set_aspect("equal")
             case Dim.THREE_D:
@@ -59,14 +64,6 @@ class Instance:
                 ax.set_box_aspect([1.0, 1.0, 1.0])
                 set_axes_equal(ax)
 
-        # if ax is None:
-        #     fig, ax = plt.subplots(1)
-        # assert isinstance(ax, Axes)
-        # ax.set_aspect("equal")
-        # self.environment.plot(ax)
-        # self.robots[0].plot(ax)
-        # ax.axis("off")
-
     def to_yaml(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as file:
@@ -76,6 +73,7 @@ class Instance:
         data = {
             "environment": self.environment.to_dict(),
             "robots": [r.to_dict() for r in self.robots],
+            "name": self.name,
         }
         if isinstance(self.baseline, Baseline):
             data["baseline"] = self.baseline.to_dict()
@@ -90,8 +88,11 @@ class Instance:
         robot_types: list[str],
         dim: Dim,
     ) -> Instance:
-        env = Environment.random(min_size, max_size, p_obstacles, dim = dim)
-        robots = [Robot.random(env, dyn, dim) for dyn in robot_types]
+        env = Environment.random(min_size, max_size, p_obstacles, dim=dim)
+        robots = []
+        for dyn in robot_types:
+            robot = Robot.random(env, dyn, dim, robots)
+            robots.append(robot)
         if None in robots:
             return cls.random(min_size, max_size, p_obstacles, robot_types, dim)
         name = str(uuid4())
@@ -101,6 +102,8 @@ class Instance:
     def from_dict(cls, data: dict[Any, Any], name: Optional[str] = None) -> Instance:
         env = Environment.from_dict(data["environment"])
         robots = [Robot.from_dict(robot_data) for robot_data in data["robots"]]
+        if data.get("name") and name is None:
+            name = data["name"]
         if data.get("baseline"):
             baseline = Baseline.from_dict(data["baseline"])
             return cls(env, robots, data, name, baseline)
@@ -111,3 +114,6 @@ class Instance:
         data = diffmp.utils.load_yaml(path)
         name = path.stem
         return cls.from_dict(data, name=name)
+
+    def __hash__(self) -> int:
+        return hash(self.name)

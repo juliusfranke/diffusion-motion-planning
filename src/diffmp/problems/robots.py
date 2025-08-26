@@ -10,11 +10,11 @@ from meshlib.mrmeshpy import AffineXf3f, Matrix3f, Vector3f
 
 import diffmp
 from diffmp.problems.etc import plot_3dmesh, plot_3dmesh_to_2d
+from diffmp.problems.etc import Dim
 
 if TYPE_CHECKING:
     from diffmp.dynamics import DynamicsBase
     from diffmp.problems.environment import Environment
-    from diffmp.problems.etc import Dim
 
 
 @dataclass
@@ -24,12 +24,24 @@ class Robot:
     dynamics: DynamicsBase
     dim: Dim
 
-    def plot2d(self, ax: Axes):
+    def plot2d(self, ax: Axes, face_color):
         xf_start = self.dynamics.tf_from_state(np.array(self.start))
         xf_goal = self.dynamics.tf_from_state(np.array(self.goal))
 
-        plot_3dmesh_to_2d(self.dynamics.mesh, xf=xf_start, ax=ax, face_color="red")
-        plot_3dmesh_to_2d(self.dynamics.mesh, xf=xf_goal, ax=ax, face_color="green")
+        plot_3dmesh_to_2d(
+            self.dynamics.mesh,
+            xf=xf_start,
+            ax=ax,
+            edge_color="red",
+            face_color=face_color,
+        )
+        plot_3dmesh_to_2d(
+            self.dynamics.mesh,
+            xf=xf_goal,
+            ax=ax,
+            edge_color="green",
+            face_color=face_color,
+        )
 
     def plot3d(self, ax: Axes):
         xf_start = self.dynamics.tf_from_state(np.array(self.start))
@@ -75,18 +87,20 @@ class Robot:
         return cls(start=start, goal=goal, dynamics=dynamics, dim=dim)
 
     @classmethod
-    def random(cls, env: Environment, dynamics_type: str, dim: Dim) -> Optional[Robot]:
+    def random(
+        cls, env: Environment, dynamics_type: str, dim: Dim, other_robots: list[Robot]
+    ) -> Optional[Robot]:
         dynamics = diffmp.dynamics.get_dynamics(dynamics_type, 1)
 
-        start_free = env.random_free(dynamics)
+        start_free = env.random_free(dynamics, other_robots)
         if start_free is None:
             return None
 
-        goal_free = env.random_free(dynamics)
+        goal_free = env.random_free(dynamics, other_robots)
         if goal_free is None:
             return None
 
-        print(start_free)
-        print(goal_free)
+        # print(start_free)
+        # print(goal_free)
 
         return cls(start=start_free, goal=goal_free, dynamics=dynamics, dim=dim)
