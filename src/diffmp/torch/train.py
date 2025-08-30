@@ -33,6 +33,8 @@ def run_epoch(
         conditioning = data["conditioning"]
         discretized = data["discretized"]
         robot_id = data["robot_id"]
+        actions_classes = data["actions_classes"]
+
         if not validate:
             model.optimizer.zero_grad()
         t = torch.randint(
@@ -60,7 +62,9 @@ def run_epoch(
             scale = torch.ones(regular.shape[0], dtype=torch.int) * 0
         else:
             scale = None
-        out = model(x, discretized, scale, robot_id)
+
+        out, test = model(x, discretized, scale, robot_id)
+        breakpoint()
 
         loss = model.loss_fn(out, epsilon)
 

@@ -14,6 +14,7 @@ import diffmp.dynamics as dy
 import diffmp.problems as pb
 import diffmp.torch as to
 from diffmp.torch.env_encoder import EnvEncoder2D, EnvEncoder3D, ScaleEmbedding
+from diffmp.torch.classifier import ActionClassifier
 import diffmp.utils as du
 
 if TYPE_CHECKING:
@@ -100,7 +101,8 @@ class Config:
     optimizer: Any = torch.optim.Adam
     validation_split: float = 0.8
     discretize: Optional[DiscretizeConfig] = None
-    robot_embedding: bool = True
+    robot_embedding: bool = False
+    classify_actions: bool = False
 
     def to_dict(self) -> dict:
         config = {
@@ -213,6 +215,8 @@ class Model(Module):
         self.regular = config.regular
         self.conditioning = config.conditioning
 
+        self.actions_dim = self.config.dynamics.u_dim * self.config.timesteps
+
         self.out_size = sum([len(param.cols) for param in self.regular])
         self.cond_size = sum([len(param.cols) for param in self.conditioning])
         self.in_size = self.out_size + self.cond_size + 1
@@ -248,6 +252,13 @@ class Model(Module):
             else:
                 self.env_encoder = EnvEncoder3D(1, env_emb_size)
 
+        if config.classify_actions:
+            self.actions_classifier = ActionClassifier(self.s_hidden, self.actions_dim)
+            self.out_size += self.s_hidden - self.actions_dim
+        else:
+            self.actions_classifier = None
+
+        breakpoint()
         layers: list[Linear] = [Linear(self.in_size, self.s_hidden, dtype=float64)]
 
         for _ in range(self.n_hidden):
@@ -286,7 +297,7 @@ class Model(Module):
         env_grid: Optional[torch.Tensor] = None,
         scale: Optional[torch.Tensor] = None,
         robot_id: Optional[torch.Tensor] = None,
-    ) -> Tensor:
+    ) -> tuple[Tensor, Optional[Tensor]]:
         if self.env_encoder is not None:
             # assert self.scale_embedding is not None
             assert scale is not None
@@ -304,5 +315,14 @@ class Model(Module):
         for i in range(len(self.linears) - 1):
             layer = self.linears[i]
             x = ReLU()(layer(x))
+
         out = self.linears[-1](x)
-        return torch.Tensor(out)
+
+        if self.actions_classifier is not None:
+            actions_vector = out[:, : self.s_hidden]
+            # breakpoint()
+            bound_logits, actions_pred = self.actions_classifier(actions_vector)
+            out = torch.concat([actions_pred, out[:, self.s_hidden :]], dim=-1)
+            return out, bound_logits
+
+        return torch.Tensor(out), None

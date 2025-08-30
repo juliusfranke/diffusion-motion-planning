@@ -24,9 +24,14 @@ class UnicycleFirstOrder(DynamicsBase):
     ) -> None:
         parameter_set = du.get_default_parameter_set()
         actions_set = []
+        c_actions_set = []
         for i in range(timesteps):
             actions_set.append(("actions", f"s_{i}"))
+            c_actions_set.append(("actions", f"s_{i}"))
             actions_set.append(("actions", f"phi_{i}"))
+            c_actions_set.append(("actions", f"phi_{i}"))
+            c_actions_set.append(("actions", f"class_{i}"))
+
         r_cols = [f"robot_{i:03}" for i in range(n_robots)]
         regular_parameters: du.ParameterSeq = [
             du.DatasetParameter("actions", 0, actions_set),
@@ -49,6 +54,9 @@ class UnicycleFirstOrder(DynamicsBase):
             du.DatasetParameter("x_g", 0, [(r_col, "x_g") for r_col in r_cols]),
             du.DatasetParameter("y_s", 0, [(r_col, "y_s") for r_col in r_cols]),
             du.DatasetParameter("y_g", 0, [(r_col, "y_g") for r_col in r_cols]),
+            du.CalculatedParameter(
+                "c_actions", 0, c_actions_set, actions_set, lambda x: x, lambda x: x
+            ),
         ]
         condition_parameters: du.ParameterSeq = [
             du.CalculatedParameter(

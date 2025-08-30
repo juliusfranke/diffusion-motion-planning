@@ -154,7 +154,15 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     regular = dataset[reg_cols]
     conditioning = dataset[cond_cols]
     # print(f"{reg_cols=}")
-    print(f"{pd.MultiIndex.from_tuples(cond_cols)=}")
+    if config.classify_actions:
+        action_cols = [col for col in regular.columns if col[0] == "actions"]
+        print(f"{pd.MultiIndex.from_tuples(cond_cols)=}")
+        actions_classes = torch.Tensor(
+            classify_actions(regular, action_cols, -0.5, 0.5).to_numpy(),
+            device=diffmp.utils.DEVICE,
+        )
+    else:
+        actions_classes = None
     regular = torch.tensor(regular.to_numpy(), device=diffmp.utils.DEVICE)
     conditioning = torch.tensor(conditioning.to_numpy(), device=diffmp.utils.DEVICE)
     if config.discretize is not None:
@@ -164,7 +172,9 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     else:
         dis = None
     if config.robot_embedding:
-        row_to_id = torch.tensor(scalar_dataset[("misc", "robot_idx")].to_numpy(), dtype=torch.int)
+        row_to_id = torch.tensor(
+            scalar_dataset[("misc", "robot_idx")].to_numpy(), dtype=torch.int
+        )
     else:
         row_to_id = None
 
@@ -174,6 +184,7 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
         discretized=dis,
         row_to_env=dataset[("env", "idx")].to_numpy(),
         row_to_id=row_to_id,
+        action_classes=actions_classes,
     )
 
 
@@ -348,4 +359,36 @@ def Theta_to_theta(
         df[(c1, f"theta_{i}")] = np.atan2(
             df[(c1, f"Theta_{i}_y")], df[(c1, f"Theta_{i}_x")]
         )
+    return df
+
+
+def classify_actions(
+    df: pd.DataFrame | pd.Series,
+    action_cols: list[tuple[str, str]],
+    low: float,
+    high: float,
+    eps: float = 1e-3,
+) -> pd.DataFrame | pd.Series:
+    df = df.copy()
+    class_cols = []
+    for col in action_cols:
+        classifier_col = (col[0], f"{col[1]}_classifier")
+        class_cols.append(classifier_col)
+        df[classifier_col] = np.zeros(len(df))
+        df.loc[df[col] < low + eps, classifier_col] = -1
+        df.loc[df[col] > high - eps, classifier_col] = 1
+    return df[class_cols]  # type:ignore
+
+
+def declassify_actions(
+    df: pd.DataFrame,
+    action_cols: list[tuple[str, str]],
+    low: float,
+    high: float,
+    eps: float = 1e-3,
+) -> pd.DataFrame:
+    for col in action_cols:
+        classifier_col = (col[0], f"{col[1]}_classifier)")
+        df.loc[df[classifier_col] == -1, col] = low
+        df.loc[df[classifier_col] == 1, col] = high
     return df

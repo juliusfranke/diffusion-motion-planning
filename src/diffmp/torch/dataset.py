@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 import torch.utils.data
 import numpy.typing as npt
 import numpy as np
@@ -14,6 +14,7 @@ class DiffusionDataset(torch.utils.data.Dataset):
         discretized: Optional[torch.Tensor] = None,
         row_to_env: Optional[npt.NDArray[np.floating]] = None,
         row_to_id: Optional[torch.Tensor] = None,
+        action_classes: Optional[torch.Tensor] = None,
         *args,
         **kwargs,
     ):
@@ -36,18 +37,22 @@ class DiffusionDataset(torch.utils.data.Dataset):
         self.row_to_id = row_to_id
         self.is_discretized = is_discretized
 
-    def __getitem__(self, idx):
-        discretized = None
+        self.actions_classes = action_classes
+
+    def __getitem__(self, idx) -> dict[str, torch.Tensor | Literal[0]]:
+        discretized: Literal[0] | torch.Tensor = 0
         if self.is_discretized:
             env_id = int(self.row_to_env[idx])  # type:ignore
             discretized = self.discretized[env_id]  # type:ignore
+
         return {
             "regular": self.regular[idx],
-            "conditioning": None
-            if self.conditioning is None
-            else self.conditioning[idx],
+            "conditioning": 0 if self.conditioning is None else self.conditioning[idx],
             "discretized": discretized,
             "robot_id": 0 if self.row_to_id is None else self.row_to_id[idx],
+            "actions_classes": 0
+            if self.actions_classes is None
+            else self.actions_classes[idx],
         }
 
     def __len__(self):
