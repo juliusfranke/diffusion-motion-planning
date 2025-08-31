@@ -193,6 +193,7 @@ def calc_param(
     dataset: pd.DataFrame,
 ) -> pd.DataFrame:
     for param in parameter_set.iter_calc():
+        assert param.to is not None
         dataset = param.to(dataset)
     return dataset
 
@@ -367,16 +368,16 @@ def classify_actions(
     action_cols: list[tuple[str, str]],
     low: float,
     high: float,
-    eps: float = 1e-3,
+    eps: float = 1e-2,
 ) -> pd.DataFrame | pd.Series:
     df = df.copy()
     class_cols = []
     for col in action_cols:
         classifier_col = (col[0], f"{col[1]}_classifier")
         class_cols.append(classifier_col)
-        df[classifier_col] = np.zeros(len(df))
-        df.loc[df[col] < low + eps, classifier_col] = -1
-        df.loc[df[col] > high - eps, classifier_col] = 1
+        df[classifier_col] = np.ones(len(df))
+        df.loc[df[col] <= low + eps, classifier_col] = 0
+        df.loc[df[col] >= high - eps, classifier_col] = 2
     return df[class_cols]  # type:ignore
 
 

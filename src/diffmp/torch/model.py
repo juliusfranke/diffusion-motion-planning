@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from diffmp.utils.reporting import OptunaReporter
 
 from .schedules import NoiseSchedule
+from .dataset import DiffusionDataset
+from .normalize import to_tanh_space, from_tanh_space
 
 
 @dataclass
@@ -169,6 +171,7 @@ class Config:
             reg_params.append(param)
             if not isinstance(param, du.CalculatedParameter):
                 continue
+            assert param.requires is not None
             for req in param.requires:
                 required.append(data["dynamics"].parameter_set[req])
 
@@ -181,6 +184,7 @@ class Config:
                 cond_params.append(param)
                 if not isinstance(param, du.CalculatedParameter):
                     continue
+                assert param.requires is not None
                 for req in param.requires:
                     required.append(data["dynamics"].parameter_set[req])
 
@@ -218,6 +222,7 @@ class Model(Module):
         self.actions_dim = self.config.dynamics.u_dim * self.config.timesteps
 
         self.out_size = sum([len(param.cols) for param in self.regular])
+        self.noise_size = self.out_size
         self.cond_size = sum([len(param.cols) for param in self.conditioning])
         self.in_size = self.out_size + self.cond_size + 1
 
@@ -253,24 +258,111 @@ class Model(Module):
                 self.env_encoder = EnvEncoder3D(1, env_emb_size)
 
         if config.classify_actions:
-            self.actions_classifier = ActionClassifier(self.s_hidden, self.actions_dim)
-            self.out_size += self.s_hidden - self.actions_dim
+            cat_emb_size = 2
+            self.cat_head = Linear(self.s_hidden, self.actions_dim * 3, dtype=float64)
+            self.cat_embedding = Embedding(3, cat_emb_size)
+            kaiming_uniform_(self.cat_head.weight)
+            self.in_size += cat_emb_size * self.actions_dim
+            # self.actions_classifier = ActionClassifier(self.s_hidden, self.actions_dim)
+            # self.out_size += self.s_hidden - self.actions_dim
         else:
-            self.actions_classifier = None
+            # self.actions_classifier = None
+            self.cat_head = None
 
-        breakpoint()
+        # breakpoint()
         layers: list[Linear] = [Linear(self.in_size, self.s_hidden, dtype=float64)]
 
         for _ in range(self.n_hidden):
             layers.append(Linear(self.s_hidden, self.s_hidden, dtype=float64))
-        layers.append(Linear(self.s_hidden, self.out_size, dtype=float64))
+        # layers.append(Linear(self.s_hidden, self.out_size, dtype=float64))
 
         self.linears = ModuleList(layers)
+        self.eps_head = Linear(self.s_hidden, self.out_size, dtype=float64)
 
         for layer in self.linears:
             kaiming_uniform_(layer.weight)  # pyright: ignore
+        kaiming_uniform_(self.eps_head.weight)
 
         self.optimizer = config.optimizer(self.parameters(), lr=self.config.lr)
+        self.norm_mean = {}
+        self.norm_std = {}
+
+    def denormalize_output(self, output: torch.Tensor):
+        reg_mean = self.norm_mean.get("regular")
+        reg_std = self.norm_std.get("regular")
+        assert isinstance(reg_mean, torch.Tensor)
+        assert isinstance(reg_std, torch.Tensor)
+
+        output = (output * reg_std) + reg_mean
+        # curr = 0
+        # for param in self.dynamics.parameter_set.iter_regular():
+        #     val_min = param.val_min
+        #     val_max = param.val_max
+        #     n_cols = len(param.cols)
+        #     if val_min is not None and val_max is not None:
+        #         assert len(val_min) == len(val_max) and len(val_min) == n_cols
+        #         for i in range(len(val_min)):
+        #             output[:, curr + i] = from_tanh_space(
+        #                 output[:, curr + i], val_min[i], val_max[i]
+        #             )
+        #     curr += n_cols
+        return output
+
+    def normalize_regular(self, data: torch.Tensor) -> torch.Tensor:
+        # curr = 0
+        # for param in self.dynamics.parameter_set.iter_regular():
+        #     val_min = param.val_min
+        #     val_max = param.val_max
+        #     n_cols = len(param.cols)
+        # if val_min is not None and val_max is not None:
+        #     assert len(val_min) == len(val_max) and len(val_min) == n_cols
+        #     for i in range(len(val_min)):
+        #         dataset.regular[:, curr + i] = to_tanh_space(
+        #             dataset.regular[:, curr + i], val_min[i], val_max[i]
+        #         )
+        # curr += n_cols
+        reg_mean = self.norm_mean.get("regular")
+        reg_std = self.norm_std.get("regular")
+        assert isinstance(reg_mean, torch.Tensor)
+        assert isinstance(reg_std, torch.Tensor)
+        data = (data - reg_mean) / reg_std
+        return data
+
+    def normalize_conditioning(self, data: torch.Tensor) -> torch.Tensor:
+        cond_mean = self.norm_mean.get("conditioning")
+        cond_std = self.norm_std.get("conditioning")
+        assert isinstance(cond_mean, torch.Tensor)
+        assert isinstance(cond_std, torch.Tensor)
+        data = (data - cond_mean) / cond_std
+        return data
+
+    def set_norm_vals(self, dataset: DiffusionDataset):
+        if self.norm_mean or self.norm_std:
+            raise Exception("Norm vals already set")
+        if dataset.actions_classes is not None:
+            mask = torch.ones_like(dataset.regular).to(torch.bool)
+            mask[:, : dataset.actions_classes.shape[1]] = dataset.actions_classes == 1
+            input_nans = torch.where(mask, dataset.regular, torch.nan)
+            reg_mean = torch.nanmean(input_nans, dim=0)
+            reg_std = torch.sqrt(
+                torch.nanmean(
+                    torch.pow(
+                        input_nans - torch.nanmean(input_nans, dim=0).unsqueeze(0), 2
+                    ),
+                    dim=0,
+                ),
+            )
+        else:
+            reg_mean = torch.mean(dataset.regular, dim=0)
+            reg_std = torch.std(dataset.regular, dim=0)
+
+        if dataset.conditioning is not None:
+            cond_mean = torch.mean(dataset.conditioning, dim=0)
+            cond_std = torch.std(dataset.conditioning, dim=0)
+            self.norm_mean["conditioning"] = cond_mean
+            self.norm_std["conditioning"] = cond_std
+        self.norm_mean["regular"] = reg_mean
+        self.norm_std["regular"] = reg_std
 
     def save(self):
         if isinstance(self.path, Path):
@@ -294,6 +386,7 @@ class Model(Module):
     def forward(
         self,
         x: Tensor,
+        x_cat: Optional[torch.Tensor] = None,
         env_grid: Optional[torch.Tensor] = None,
         scale: Optional[torch.Tensor] = None,
         robot_id: Optional[torch.Tensor] = None,
@@ -312,17 +405,26 @@ class Model(Module):
             robot_emb = self.robot_embedding(robot_id)
             x = torch.concat([x, robot_emb], dim=-1)
 
-        for i in range(len(self.linears) - 1):
+        if self.cat_head is not None:
+            assert x_cat is not None
+            cat_emb = self.cat_embedding(x_cat).reshape(x.shape[0], -1)
+            x = torch.concat([x, cat_emb], dim=-1)
+
+        for i in range(len(self.linears)):
             layer = self.linears[i]
             x = ReLU()(layer(x))
 
-        out = self.linears[-1](x)
-
-        if self.actions_classifier is not None:
-            actions_vector = out[:, : self.s_hidden]
+        # out = self.linears[-1](x)
+        bound_logits = None
+        if self.cat_head is not None:
+            # actions_vector = out[:, : self.s_hidden]
             # breakpoint()
-            bound_logits, actions_pred = self.actions_classifier(actions_vector)
-            out = torch.concat([actions_pred, out[:, self.s_hidden :]], dim=-1)
-            return out, bound_logits
+            bound_logits = self.cat_head(x)
+            bound_logits = bound_logits.view(x.shape[0], -1, 3)
+            # bound_logits, actions_pred = self.actions_classifier(actions_vector)
+            # out = torch.concat([actions_pred, out[:, self.s_hidden :]], dim=-1)
+            # return out, bound_logits
 
-        return torch.Tensor(out), None
+        out = self.eps_head(x)
+
+        return out, bound_logits

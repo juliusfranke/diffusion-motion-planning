@@ -29,6 +29,7 @@ from .dbcbs_ext import (
     Task,
     Solution,
     execute_task,
+    execute_tasks,
     DEFAULT_CONFIG,
 )
 
@@ -60,6 +61,7 @@ __all__ = [
     "Task",
     "Solution",
     "execute_task",
+    "execute_tasks",
     "DEFAULT_CONFIG",
     "mult_el_wise",
     "get_columns",

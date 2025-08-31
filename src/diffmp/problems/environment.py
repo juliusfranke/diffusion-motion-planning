@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 from matplotlib.axes import Axes
+from mpl_toolkits.mplot3d import Axes3D
 from meshlib.mrmeshpy import (
     AffineXf3f,
     BooleanOperation,
@@ -140,7 +141,7 @@ class Environment:
         ax.fill(xs, ys, facecolor="white", edgecolor="black", alpha=1)
         plot_3dmesh_to_2d(self.blocked_mesh, ax=ax)
 
-    def plot3d(self, ax: Axes):
+    def plot3d(self, ax: Axes3D):
         x0, y0, z0 = self.min
         x1, y1, z1 = self.max
         corners = np.array(
@@ -174,11 +175,13 @@ class Environment:
             ax.plot(xs, ys, zs, color="black")
         plot_3dmesh(self.blocked_mesh, ax)
 
-    def plot(self, ax: Optional[Axes] = None):
+    def plot(self, ax: Optional[Axes | Axes3D] = None):
         match self.dim:
             case Dim.TWO_D:
                 if ax is None:
                     fig, ax = plt.subplots(1)
+                elif isinstance(ax, Axes3D):
+                    raise TypeError
                 self.plot2d(ax)
                 ax.autoscale()
                 ax.set_aspect("equal")
@@ -186,6 +189,8 @@ class Environment:
                 if ax is None:
                     fig = plt.figure()
                     ax = fig.add_subplot(111, projection="3d")
+                elif isinstance(ax, Axes):
+                    raise TypeError
                 self.plot3d(ax)
                 ax.set_box_aspect([1.0, 1.0, 1.0])
                 set_axes_equal(ax)
@@ -205,9 +210,9 @@ class Environment:
         Nx, Ny, Nz = n, n, n
         s_max = max(self.size)
         d = (s_max / n) / 2
-        xs = np.linspace(0+d, s_max-d, n)
-        ys = np.linspace(0+d, s_max-d, n)
-        zs = np.linspace(0+d, s_max-d, n)
+        xs = np.linspace(0 + d, s_max - d, n)
+        ys = np.linspace(0 + d, s_max - d, n)
+        zs = np.linspace(0 + d, s_max - d, n)
         # breakpoint()
         if self.dim == Dim.TWO_D:
             zs = np.array([0])

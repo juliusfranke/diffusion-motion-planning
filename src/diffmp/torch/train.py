@@ -10,6 +10,7 @@ from typing import Any, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
@@ -18,6 +19,7 @@ import diffmp.problems as pb
 import diffmp.utils as du
 
 from . import CompositeConfig, ExponentialMovingAverage, Model, compute_test_loss
+from .classifier import compute_log_posterior
 
 
 def run_epoch(
@@ -25,7 +27,10 @@ def run_epoch(
     training_loader: DataLoader[Any],
     alpha_bars: npt.NDArray[np.floating],
     validate: bool,
+    num_action_classes: int = 3,
+    loss_weights: Optional[dict[str, float]] = None,
 ) -> float:
+    loss_weights = loss_weights or {"gaussian": 1.0, "categorical": 1.0}
     running_loss = 0.0
     i = 0
     for i, data in enumerate(training_loader):
@@ -33,10 +38,12 @@ def run_epoch(
         conditioning = data["conditioning"]
         discretized = data["discretized"]
         robot_id = data["robot_id"]
-        actions_classes = data["actions_classes"]
+        x0_cat = data["actions_classes"]
+        interior_mask = x0_cat == 1
 
         if not validate:
             model.optimizer.zero_grad()
+
         t = torch.randint(
             model.config.denoising_steps,
             size=(regular.shape[0],),
@@ -53,9 +60,9 @@ def run_epoch(
         data_noised = alpha_t**0.5 * regular + epsilon * (1 - alpha_t) ** 0.5
 
         if conditioning.shape[1] != 0:
-            x = torch.concat([data_noised, conditioning, t.unsqueeze(1)], dim=-1)
+            x_cont = torch.concat([data_noised, conditioning, t.unsqueeze(1)], dim=-1)
         else:
-            x = torch.concat([data_noised, t.unsqueeze(1)], dim=-1)
+            x_cont = torch.concat([data_noised, t.unsqueeze(1)], dim=-1)
 
         if discretized is not None:
             # TODO this is wrong lol
@@ -63,10 +70,70 @@ def run_epoch(
         else:
             scale = None
 
-        out, test = model(x, discretized, scale, robot_id)
-        breakpoint()
+        out_gauss, logits_gauss = model(x_cont, x0_cat, discretized, scale, robot_id)
+        # breakpoint()
 
-        loss = model.loss_fn(out, epsilon)
+        if model.config.classify_actions:
+            # Mask scalar loss to only include the values that are not at action limits
+            out_interior = out_gauss[:, : model.actions_dim][interior_mask]
+            eps_interior = epsilon[:, : model.actions_dim][interior_mask]
+            scalar_masked_loss = model.loss_fn(
+                out_interior,
+                eps_interior,
+            )
+            out_misc = out_gauss[:, model.actions_dim :]
+            eps_misc = epsilon[:, model.actions_dim :]
+            scalar_loss = model.loss_fn(out_misc, eps_misc)
+            loss_gaussian = scalar_masked_loss + scalar_loss
+            # Compute multimonial branch
+            alpha_bar_t = torch.index_select(
+                torch.tensor(alpha_bars, device=du.DEVICE), 0, t
+            )
+            log_x0 = (
+                F.one_hot(x0_cat, num_classes=num_action_classes)
+                .float()
+                .clamp(min=1e-40)
+                .log()
+            )
+
+            log_alpha = torch.log(alpha_bar_t).unsqueeze(1).unsqueeze(2)
+            log_rest = torch.log1p(-alpha_bar_t).unsqueeze(1).unsqueeze(2) - np.log(
+                num_action_classes
+            )
+            log_q_xt = torch.logsumexp(
+                torch.stack([log_x0 + log_alpha, log_rest.expand_as(log_x0)], dim=-1),
+                dim=-1,
+            )
+
+            probs_xt = torch.exp(log_q_xt)
+            xt = torch.distributions.Categorical(
+                probs=probs_xt.view(-1, num_action_classes)
+            ).sample()
+            xt = xt.view(x0_cat.shape)
+            log_xt = (
+                F.one_hot(xt, num_classes=num_action_classes)
+                .float()
+                .clamp(min=1e-40)
+                .log()
+            )
+
+            log_hat_x0 = F.log_softmax(logits_gauss, dim=-1)
+            log_q_post = compute_log_posterior(
+                log_xt, log_x0, t, alpha_bars, num_action_classes
+            )
+            log_p_post = compute_log_posterior(
+                log_xt, log_hat_x0, t, alpha_bars, num_action_classes
+            )
+
+            q = torch.exp(log_q_post)
+            loss_categorical = torch.sum(q * (log_q_post - log_p_post), dim=-1).mean()
+
+            loss = (
+                loss_weights["gaussian"] * loss_gaussian
+                + loss_weights["categorical"] * loss_categorical
+            )
+        else:
+            loss = model.loss_fn(out_gauss, epsilon)
 
         running_loss += float(loss.detach().cpu().numpy())
 
@@ -171,6 +238,7 @@ def run_test(model: Model, trials: int = 1, n_instances: int = 1) -> float:
     tmp_paths = []
     instances = random.sample(model.config.test_instances, n_instances)
     test_results = {instance.name: [] for instance in instances}
+    pbar0 = tqdm(desc="Sampling", total=n_instances * trials, leave=False)
     for instance in instances:
         for _ in range(trials):
             mp_paths = []
@@ -191,39 +259,45 @@ def run_test(model: Model, trials: int = 1, n_instances: int = 1) -> float:
                 cfg["delta_0"] = 0.9
             task = du.Task(instance, cfg, 1000, 1500, [])
             tasks.append(task)
+            pbar0.update()
+    pbar0.close()
     for task in tasks:
         task.instance = task.instance.to_dict()
-    with mp.Pool(4, maxtasksperchild=10) as p:
-        for executed_task in p.imap_unordered(du.execute_task, tasks):
-            instance = executed_task.instance
-            if isinstance(instance, pb.Instance):
-                baseline = instance.baseline
-                name = instance.name
-            else:
-                baseline = pb.Baseline.from_dict(instance["baseline"])
-                name = instance["name"]
-            assert isinstance(baseline, diffmp.problems.Baseline)
-            if len(executed_task.solutions) == 0:
-                test_results[name].append([0, 0, 0])
-                # test_loss = compute_test_loss(
-                #     0, baseline.success, 0, baseline.duration, 0, baseline.cost
-                # )
-                # test_losses.append(test_loss)
-                continue
-            this_success = 1
-            this_duration = executed_task.solutions[0].runtime
-            this_cost = min([s.cost for s in executed_task.solutions])
-            test_results[name].append([1, this_duration, this_cost])
-            # print(this_duration, baseline.duration, this_cost, baseline.cost)
+    pbar1 = tqdm(desc="Testing", total=len(tasks), leave=False)
+    executed_tasks = du.execute_tasks(tasks, timeout=5, pbar=pbar1)
+    # with mp.Pool(4, maxtasksperchild=10) as p:
+    pbar1.close()
+    # for executed_task in p.imap_unordered(du.execute_task, tasks):
+    for executed_task in executed_tasks:
+        instance = executed_task.instance
+        if isinstance(instance, pb.Instance):
+            baseline = instance.baseline
+            name = instance.name
+        else:
+            baseline = pb.Baseline.from_dict(instance["baseline"])
+            name = instance["name"]
+        assert isinstance(baseline, diffmp.problems.Baseline)
+        if len(executed_task.solutions) == 0:
+            test_results[name].append([0, 0, 0])
             # test_loss = compute_test_loss(
-            #     this_success,
-            #     baseline.success,
-            #     this_duration,
-            #     baseline.duration,
-            #     this_cost,
-            #     baseline.cost,
+            #     0, baseline.success, 0, baseline.duration, 0, baseline.cost
             # )
             # test_losses.append(test_loss)
+            continue
+        this_success = 1
+        this_duration = executed_task.solutions[0].runtime
+        this_cost = min([s.cost for s in executed_task.solutions])
+        test_results[name].append([1, this_duration, this_cost])
+        # print(this_duration, baseline.duration, this_cost, baseline.cost)
+        # test_loss = compute_test_loss(
+        #     this_success,
+        #     baseline.success,
+        #     this_duration,
+        #     baseline.duration,
+        #     this_cost,
+        #     baseline.cost,
+        # )
+        # test_losses.append(test_loss)
     test_losses = []
     for instance in instances:
         name = instance.name
@@ -231,7 +305,7 @@ def run_test(model: Model, trials: int = 1, n_instances: int = 1) -> float:
         assert isinstance(baseline, pb.Baseline)
         results = np.array(test_results[name])
         successes = np.sum(results[:, 0])
-        debug = True
+        debug = False
         if successes == 0:
             loss = compute_test_loss(
                 0, baseline.success, 0, baseline.duration, 0, baseline.cost, debug=debug
@@ -259,7 +333,11 @@ def run_test(model: Model, trials: int = 1, n_instances: int = 1) -> float:
 
 def get_data_loader(model: Model) -> Tuple[DataLoader, DataLoader]:
     dataset = du.load_dataset(model.config)
-
+    # breakpoint()
+    model.set_norm_vals(dataset)
+    dataset.regular = model.normalize_regular(dataset.regular)
+    if dataset.conditioning is not None:
+        dataset.conditioning = model.normalize_conditioning(dataset.conditioning)
     test_abs = int(len(dataset) * model.config.validation_split)
     train_subset, val_subset = random_split(
         dataset, [test_abs, len(dataset) - test_abs]

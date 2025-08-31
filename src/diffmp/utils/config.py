@@ -30,6 +30,8 @@ class Parameter:
     # size: int
     weight: float
     cols: list[tuple[str, str]]
+    val_min: Optional[list[float]] = None
+    val_max: Optional[list[float]] = None
 
 
 @dataclass
@@ -39,8 +41,8 @@ class DatasetParameter(Parameter):
 
 @dataclass
 class CalculatedParameter(Parameter):
-    requires: list[str]
-    to: Callable[[pd.DataFrame], pd.DataFrame]
+    requires: Optional[list[str]] = None
+    to: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
     fr: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
 
 
@@ -182,7 +184,9 @@ def get_default_parameter_set() -> ParameterSet:
             DatasetParameter("rel_l", 0, [("misc", "rel_l")]),
             DatasetParameter("count", 0, [("misc", "count")]),
             DatasetParameter("robot_id", 0, [("misc", "robot_idx")]),
-            CalculatedParameter("rel_p", 1, [("misc", "rel_p")], ["count"], calc_rel_p),
+            CalculatedParameter(
+                "rel_p", 1, [("misc", "rel_p")], requires=["count"], to=calc_rel_p
+            ),
         ],
         condition=True,
     )

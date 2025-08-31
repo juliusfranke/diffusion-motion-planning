@@ -24,17 +24,23 @@ class UnicycleFirstOrder(DynamicsBase):
     ) -> None:
         parameter_set = du.get_default_parameter_set()
         actions_set = []
-        c_actions_set = []
+        # c_actions_set = []
         for i in range(timesteps):
             actions_set.append(("actions", f"s_{i}"))
-            c_actions_set.append(("actions", f"s_{i}"))
+            # c_actions_set.append(("actions", f"s_{i}"))
             actions_set.append(("actions", f"phi_{i}"))
-            c_actions_set.append(("actions", f"phi_{i}"))
-            c_actions_set.append(("actions", f"class_{i}"))
+            # c_actions_set.append(("actions", f"phi_{i}"))
+            # c_actions_set.append(("actions", f"class_{i}"))
 
         r_cols = [f"robot_{i:03}" for i in range(n_robots)]
         regular_parameters: du.ParameterSeq = [
-            du.DatasetParameter("actions", 0, actions_set),
+            du.DatasetParameter(
+                "actions",
+                0,
+                actions_set,
+                val_min=[min_vel, min_angular_vel] * timesteps,
+                val_max=[max_vel, max_angular_vel] * timesteps,
+            ),
             du.DatasetParameter(
                 "theta_0",
                 0,
@@ -44,9 +50,11 @@ class UnicycleFirstOrder(DynamicsBase):
                 "Theta_0",
                 0,
                 [("states", "Theta_0_x"), ("states", "Theta_0_y")],
-                ["theta_0"],
-                partial(du.theta_to_Theta, col1="states"),
-                partial(du.Theta_to_theta, col1="states"),
+                requires=["theta_0"],
+                val_min=[-1, -1],
+                val_max=[1, 1],
+                to=partial(du.theta_to_Theta, col1="states"),
+                fr=partial(du.Theta_to_theta, col1="states"),
             ),
             du.DatasetParameter("theta_s", 0, [(r_col, "theta_s") for r_col in r_cols]),
             du.DatasetParameter("theta_g", 0, [(r_col, "theta_g") for r_col in r_cols]),
@@ -54,9 +62,6 @@ class UnicycleFirstOrder(DynamicsBase):
             du.DatasetParameter("x_g", 0, [(r_col, "x_g") for r_col in r_cols]),
             du.DatasetParameter("y_s", 0, [(r_col, "y_s") for r_col in r_cols]),
             du.DatasetParameter("y_g", 0, [(r_col, "y_g") for r_col in r_cols]),
-            du.CalculatedParameter(
-                "c_actions", 0, c_actions_set, actions_set, lambda x: x, lambda x: x
-            ),
         ]
         condition_parameters: du.ParameterSeq = [
             du.CalculatedParameter(
@@ -64,27 +69,27 @@ class UnicycleFirstOrder(DynamicsBase):
                 0,
                 [(r_col, "Theta_s_x") for r_col in r_cols]
                 + [(r_col, "Theta_s_y") for r_col in r_cols],
-                ["theta_s"],
-                partial(du.theta_to_Theta, col1=r_cols, i="s"),
-                partial(du.Theta_to_theta, col1=r_cols, i="s"),
+                requires=["theta_s"],
+                to=partial(du.theta_to_Theta, col1=r_cols, i="s"),
+                fr=partial(du.Theta_to_theta, col1=r_cols, i="s"),
             ),
             du.CalculatedParameter(
                 "Theta_s",
                 0,
                 [(r_col, "Theta_s_x") for r_col in r_cols]
                 + [(r_col, "Theta_s_y") for r_col in r_cols],
-                ["theta_s"],
-                partial(du.theta_to_Theta, col1=r_cols, i="s"),
-                partial(du.Theta_to_theta, col1=r_cols, i="s"),
+                requires=["theta_s"],
+                to=partial(du.theta_to_Theta, col1=r_cols, i="s"),
+                fr=partial(du.Theta_to_theta, col1=r_cols, i="s"),
             ),
             du.CalculatedParameter(
                 "Theta_g",
                 0,
                 [(r_col, "Theta_g_x") for r_col in r_cols]
                 + [(r_col, "Theta_g_y") for r_col in r_cols],
-                ["theta_g"],
-                partial(du.theta_to_Theta, col1=r_cols, i="g"),
-                partial(du.Theta_to_theta, col1=r_cols, i="g"),
+                requires=["theta_g"],
+                to=partial(du.theta_to_Theta, col1=r_cols, i="g"),
+                fr=partial(du.Theta_to_theta, col1=r_cols, i="g"),
             ),
         ]
         parameter_set.add_parameters(

@@ -4,9 +4,11 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional, Callable
 
 import dbcbs_py
+import multiprocessing as mp
+from tqdm import tqdm
 import msgpack
 import numpy as np
 import numpy.typing as npt
@@ -116,6 +118,89 @@ def execute_task(task: Task) -> Task:
     tmp1.close()
     tmp2.close()
     return task
+
+
+def worker_func(task: Task, result_queue: mp.Queue, idx: int) -> None:
+    try:
+        result = execute_task(task)
+        result_queue.put((idx, "done", result))
+    except Exception as e:
+        result_queue.put((idx, "error", str(e)))
+
+
+def execute_tasks(
+    tasks: list[Task],
+    # func: Callable,
+    timeout: float,
+    max_workers: int = 4,
+    pbar: Optional[tqdm] = None,
+) -> list[Task]:
+    result_queue = mp.Queue()
+    active = []  # [(Process, idx)]
+    # results = [None] * len(tasks)
+    results: list[Task] = []
+    statuses = ["pending"] * len(tasks)
+    next_task = 0
+
+    successes = 0
+    failures = 0
+    # duration_sum = 0
+    # cost_sum = 0
+
+    def start_task(idx):
+        p = mp.Process(target=worker_func, args=(tasks[idx], result_queue, idx))
+        p.start()
+        return p
+
+    while next_task < len(tasks) or active:
+        # Start new tasks if we have slots
+        while len(active) < max_workers and next_task < len(tasks):
+            p = start_task(next_task)
+            active.append((p, time.time(), next_task))
+            next_task += 1
+
+        # Check active tasks
+        new_active = []
+        for p, start_time, idx in active:
+            p.join(timeout=0)  # Non-blocking check
+            if p.exitcode is not None:
+                # Process finished
+                continue
+            elif time.time() - start_time > timeout:
+                # Timeout: kill
+                p.terminate()
+                p.join()
+                statuses[idx] = "timeout"
+                failures += 1
+                if pbar is not None:
+                    pbar.update()
+                    pbar.set_postfix({"s": successes, "f": failures})
+            else:
+                # Still running
+                new_active.append((p, start_time, idx))
+        active = new_active
+
+        # Collect results
+        while not result_queue.empty():
+            idx, status, result = result_queue.get()
+            assert isinstance(result, Task)
+            statuses[idx] = status
+            # results[idx] = result
+            # tasks[idx] = result
+            results.append(result)
+
+            if len(result.solutions):
+                successes += 1
+            else:
+                failures += 1
+
+            if pbar is not None:
+                pbar.update()
+                pbar.set_postfix({"s": successes, "f": failures})
+
+        time.sleep(0.05)  # Avoid busy-looping
+    # breakpoint()
+    return results
 
 
 def out_to_mps(

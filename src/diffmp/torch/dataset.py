@@ -37,7 +37,9 @@ class DiffusionDataset(torch.utils.data.Dataset):
         self.row_to_id = row_to_id
         self.is_discretized = is_discretized
 
-        self.actions_classes = action_classes
+        self.actions_classes = (
+            action_classes if action_classes is None else action_classes.to(torch.long)
+        )
 
     def __getitem__(self, idx) -> dict[str, torch.Tensor | Literal[0]]:
         discretized: Literal[0] | torch.Tensor = 0
@@ -50,9 +52,9 @@ class DiffusionDataset(torch.utils.data.Dataset):
             "conditioning": 0 if self.conditioning is None else self.conditioning[idx],
             "discretized": discretized,
             "robot_id": 0 if self.row_to_id is None else self.row_to_id[idx],
-            "actions_classes": 0
-            if self.actions_classes is None
-            else self.actions_classes[idx],
+            "actions_classes": (
+                0 if self.actions_classes is None else self.actions_classes[idx]
+            ),
         }
 
     def __len__(self):
