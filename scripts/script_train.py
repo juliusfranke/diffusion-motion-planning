@@ -32,22 +32,25 @@ def load(config_path: Path, model_path: Path) -> diffmp.torch.Model:
 
 
 if __name__ == "__main__":
+    torch.autograd.set_detect_anomaly(True)
+    torch.manual_seed(42)
     # dynamics = "unicycle1_v0"
     # dynamics = "unicycle2_v0"
     config_path = Path(sys.argv[1])
-    # model_name = sys.argv[2]
-    # model_path = Path(f"data/models/{model_name}")
-    epochs = 500
+    model_name = sys.argv[2]
+    model_path = Path(f"data/models/{model_name}")
+    epochs = 5000
+    diffmp.utils.DEVICE = "cpu"
     if config_path.suffixes[0] == ".standard":
         config = diffmp.torch.Config.from_yaml(config_path)
         dynamics = config.dynamics.name
         model = diffmp.torch.Model(config)
-        # model.path = model_path
+        model.path = model_path
 
-        diffmp.torch.train(model, epochs)
+        diffmp.torch.train(model, epochs, test_epoch=50)
     elif config_path.suffixes[0] == ".composite":
         composite_config = diffmp.torch.CompositeConfig.from_yaml(config_path)
-        diffmp.torch.train_composite(composite_config, 1000)
+        diffmp.torch.train_composite(composite_config, epochs)
 
     # diffmp.torch.Model.load(Path("data/models/yeehaaa"))
     # breakpoint()

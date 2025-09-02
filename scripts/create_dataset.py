@@ -186,12 +186,15 @@ def tasks_to_mp(tasks: list[diffmp.utils.Task], lengths: list[int], robot_idx: i
 def main():
     trials = int(sys.argv[1])
     # trials = 1000
-    timelimit_db_astar = 5000
-    timelimit_db_cbs = 5000
+    timelimit_db_astar = 10000
+    timelimit_db_cbs = 10000
     lengths = [5, 10, 15, 20]
-    lengths = [10]
+    # lengths = [10]
+    n_random = 100
     dynamics = "unicycle1_v0"
     n_robots = 2
+    p_min = 0.3
+    p_max = 0.5
     # dynamics = ["unicycle1_v0", "unicycle1_v0"]
     # dynamics = "unicycle2_v0"
     # dynamics = "car1_v0"
@@ -220,16 +223,17 @@ def main():
     }
     if dynamics == "car1_v0":
         data["delta_0"] = 0.9
-    n_random = 20
     random_instances = []
     pbar_0 = tqdm(total=n_random)
     for _ in range(n_random):
         instance = diffmp.problems.Instance.random(
-            5,
-            5,
-            random.random() * (0.4 - 0.1) + 0.1,
+            random.randint(5, 10),
+            random.randint(5, 10),
+            # 5,
+            # 5,
+            random.random() * (p_max - p_min) + p_min,
             # 0.2,
-            [dynamics]*n_robots,
+            [dynamics] * n_robots,
             dim=diffmp.problems.Dim.TWO_D,
         )
         random_instances.append(instance)
@@ -274,23 +278,27 @@ def main():
     pbar.set_postfix({"s": solved, "f": failure})
     solved_tasks = []
     random.shuffle(tasks)
-    with mp.Pool(6, maxtasksperchild=10) as p:
-        try:
-            for result in p.imap_unordered(diffmp.utils.execute_task, tasks):
-                if len(result.solutions) > 0:
-                    solved_tasks.append(result)
-                    solved += 1
-                else:
-                    failure += 1
+    solved_tasks = diffmp.utils.dbcbs_ext.execute_tasks(
+        tasks, timeout=(timelimit_db_cbs * 2) / 1000, max_workers=6, pbar=pbar
+    )
+    # with mp.Pool(6, maxtasksperchild=10) as p:
+    #     try:
+    #         for result in p.imap_unordered(diffmp.utils.execute_task, tasks):
+    #             if len(result.solutions) > 0:
+    #                 solved_tasks.append(result)
+    #                 solved += 1
+    #             else:
+    #                 failure += 1
 
-                pbar.set_postfix({"s": solved, "f": failure})
-                pbar.update()
-        except KeyboardInterrupt:
-            pass
+    #             pbar.set_postfix({"s": solved, "f": failure})
+    #             pbar.update()
+    #     except KeyboardInterrupt:
+    #         pass
 
     pbar.close()
     solved_instances = set()
     for task in solved_tasks:
+        assert isinstance(task.instance, dict)
         task.instance = instance_dict[task.instance["name"]]
         solved_instances.add(task.instance)
     primitives = {length: [] for length in lengths}
@@ -303,8 +311,8 @@ def main():
     env_uuid = [instance.name for instance in solved_instances]
     uuid_to_idx = {uuid: idx for idx, uuid in enumerate(env_uuid)}
 
-    filename = f"data/training_datasets/{dynamics}_x{n_robots}_.h5"
-    breakpoint()
+    filename = f"data/training_datasets/{dynamics}_x{n_robots}.h5"
+    # breakpoint()
     with h5py.File(filename, "w") as f:
         f.create_dataset("env_uuid", data=np.array(env_uuid, dtype="S36"))
         f.create_dataset(

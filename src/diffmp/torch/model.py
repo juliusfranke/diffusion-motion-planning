@@ -141,10 +141,10 @@ class Config:
             "dataset_size": self.dataset_size,
             "reporters": [du.Reporters(type(r)).name for r in self.reporters],
             "validation_split": self.validation_split,
-            # "normalize": {
-            #     "mean": {k: t.tolist() for k, t in self.norm_mean.items()},
-            #     "std": {k: t.tolist() for k, t in self.norm_std.items()},
-            # },
+            "normalize": {
+                "mean": {k: t.tolist() for k, t in self.norm_mean.items()},
+                "std": {k: t.tolist() for k, t in self.norm_std.items()},
+            },
         }
         if isinstance(self.discretize, DiscretizeConfig):
             config["discretize"] = self.discretize.to_dict()
@@ -295,6 +295,24 @@ class Config:
 
         if "discretize" in data.keys():
             data["discretize"] = DiscretizeConfig.from_dict(data["discretize"])
+        if "normalize" in data.keys():
+            data["norm_mean"] = {
+                k: (
+                    torch.tensor(v, device=du.DEVICE)
+                    if isinstance(v, list)
+                    else torch.tensor([v], device=du.DEVICE)
+                )
+                for k, v in data["normalize"]["mean"].items()
+            }
+            data["norm_std"] = {
+                k: (
+                    torch.tensor(v, device=du.DEVICE)
+                    if isinstance(v, list)
+                    else torch.tensor([v], device=du.DEVICE)
+                )
+                for k, v in data["normalize"]["std"].items()
+            }
+            data.pop("normalize")
 
         return cls(**data)
 

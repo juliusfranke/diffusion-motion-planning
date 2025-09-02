@@ -201,19 +201,17 @@ class AimReporter(Reporter):
 
 
 class OptunaReporter(Reporter):
-    def __init__(self, reported_min: int = 5) -> None:
+    def __init__(self, allow_cancel_epoch: int = 50) -> None:
         self.trial: Optional[optuna.Trial] = None
-        self.reported = 0
-        self.reported_min = reported_min
         self.best_test = 0
+        self.allow_cancel_epoch = allow_cancel_epoch
 
     def report_test(self, test_loss: float, step: int, **kwargs) -> None:
         assert isinstance(self.trial, optuna.Trial)
 
         self.trial.report(test_loss, step)
         self.best_test = max(test_loss, self.best_test)
-        self.reported += 1
-        if self.reported > self.reported_min:
+        if step + 1 >= self.allow_cancel_epoch:
             if self.trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
         return super().report_test(test_loss, step, **kwargs)

@@ -76,7 +76,8 @@
             "enum": [
                 "linear",
                 "linear_scaled",
-                "sigmoid"
+                "sigmoid",
+                "cosine"
             ],
             "description": "Noise schedule"
         },
@@ -163,6 +164,10 @@
                                 },
                                 {
                                     "enum": [
+                                        "x_s",
+                                        "x_g",
+                                        "y_s",
+                                        "y_g",
                                         "theta_s",
                                         "theta_g",
                                         "Theta_s",

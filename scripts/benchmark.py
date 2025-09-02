@@ -22,17 +22,24 @@ import numpy as np
 
 
 TRIALS = 10
+# TRIALS = 4
 # TRIALS = 50
-TIMELIMIT_DB_ASTAR = 2000
+TIMELIMIT_DB_ASTAR = 5000
 TIMELIMIT_DB_CBS = 5000
-N_MPs = [100, 150, 200, 250]
-# N_MPs = [100]
+# N_MPs = [100, 150, 200, 250]
+N_MPs = [100]
 DELTA_0s = [0.5]
 # DELTA_0s = [0.9]
 # DELTA_0s = [0.3, 0.5, 0.7]
 # DELTA_0s = [0.7, 0.9, 1.1]
 # N_RANDOM = 50
-N_RANDOM = 10
+N_RANDOM = 20
+# N_RANDOM = 1
+N_ROBOTS = 2
+P_MAX = 0.5
+P_MIN = 0.3
+# P_MAX = 0.2
+# P_MIN = 0.1
 DATA = {
     # "delta_0": 0.5,
     "delta_rate": 0.9,
@@ -42,6 +49,13 @@ DATA = {
     "filter_duplicates": True,
     "heuristic1": "reverse-search",
     "heuristic1_delta": 1.0,
+    "execute_joint_optimization": True,
+    "execute_greedy_optimization": False,
+    "heuristic1_num_primitives_0": 100,
+    "always_add_node": False,
+    "rewire": True,
+    "residual_force": False,  # NN, augmented state or Ellipsoid shape
+    "suboptimality_factor": 1.3,  # 3.3, 2 - if Ellipsoid shape
 }
 
 
@@ -95,9 +109,9 @@ def plot_results(benchmark: pd.DataFrame):
     fig, ax = plt.subplots(1, 3)
     # sns.barplot(benchmark, y="success", hue="name", ax=ax[0])
     h = sns.boxplot(benchmark, y="rel_d", hue="name", ax=ax[0])
-    h.get_legend().set_visible(False)
+    h.get_legend().set_visible(False)  # pyright:ignore
     g = sns.boxplot(benchmark, y="rel_fc", hue="name", ax=ax[1])
-    g.get_legend().set_visible(False)
+    g.get_legend().set_visible(False)  # pyright:ignore
     sns.boxplot(benchmark, y="rel_bc", hue="name", ax=ax[2])
     for i in range(3):
         lintresh = thresh[i]
@@ -120,17 +134,25 @@ def get_baseline_config(dynamics: str):
     mp_path_base = [f"../new_format_motions/{dynamics}/{dynamics}.msgpack"]
     configurations_base = []
     for mp_path in mp_path_base:
-        temp = {"mp_path": mp_path}
+        temp = {"mp_path": [mp_path] * N_ROBOTS}
         configurations_base.append(DATA | temp)
     return configurations_base
 
 
-def gen_instances(n_random: int, dynamics: str):
+def gen_instances(
+    n_random: int, dynamics: str, n_robots: int, p_max: float, p_min: float
+):
     random_instances = []
     pbar_0 = tqdm(total=n_random)
     for _ in range(n_random):
         instance = diffmp.problems.Instance.random(
-            6, 8, random.randint(4, 6), random.random() * (0.4 - 0.1) + 0.1, [dynamics]
+            random.randint(5, 10),
+            random.randint(5, 10),
+            # 5,
+            # 5,
+            random.random() * (p_max - p_min) + p_min,
+            [dynamics] * n_robots,
+            dim=diffmp.problems.Dim.TWO_D,
         )
         random_instances.append(instance)
         pbar_0.update()
@@ -145,7 +167,7 @@ def benchmark_model(
     if dynamics == "car1_v0":
         DATA["delta_0"] = 0.9
     configurations_base = get_baseline_config(dynamics)
-    instances = gen_instances(N_RANDOM, dynamics)
+    instances = gen_instances(N_RANDOM, dynamics, N_ROBOTS, P_MAX, P_MIN)
     tasks = []
     for instance in instances:
         for trial in range(TRIALS):
@@ -217,29 +239,43 @@ def benchmark_composite(
     # if dynamics == "car1_v0":
     #     DATA["delta_0"] = 0.9
     configurations_base = get_baseline_config(dynamics)
-    instances = gen_instances(N_RANDOM, dynamics)
+    instances = gen_instances(N_RANDOM, dynamics, N_ROBOTS, P_MAX, P_MIN)
     # instances = [
     #     diffmp.problems.Instance.from_yaml(Path("../example/parallelpark_0.yaml"))
     # ]
     tasks = []
+    pbar_export = tqdm(
+        desc="Export",
+        total=len(instances) * len(DELTA_0s) * len(N_MPs) * TRIALS * N_ROBOTS,
+    )
     for instance in instances:
+        instance_data = instance.to_dict()
         for delta_0 in DELTA_0s:
             for N_MP in N_MPs:
                 for _ in range(TRIALS):
-
-                    tmp_path = tempfile.NamedTemporaryFile(suffix=".yaml", delete=False)
-                    diffmp.utils.export_composite(
-                        composite_config, instance, Path(tmp_path.name), n_mp=N_MP * 5
-                    )
+                    mp_paths = []
+                    for robot_idx in range(N_ROBOTS):
+                        tmp_path = tempfile.NamedTemporaryFile(
+                            suffix=".msgpack", delete=False
+                        )
+                        diffmp.utils.export_composite(
+                            composite_config,
+                            instance,
+                            Path(tmp_path.name),
+                            n_mp=N_MP * 1,
+                            robot_idx=robot_idx,
+                        )
+                        mp_paths.append(str(tmp_path.name))
+                        pbar_export.update()
                     temp = DATA | {
-                        "mp_path": str(tmp_path.name),
+                        "mp_path": mp_paths,
                         "num_primitives_0": N_MP,
                         "delta_0": delta_0,
                     }
                     # temp["num_primitives_0"] = N_MP
                     tasks += [
                         diffmp.utils.Task(
-                            instance,
+                            instance_data,
                             temp,
                             TIMELIMIT_DB_ASTAR,
                             TIMELIMIT_DB_CBS,
@@ -253,7 +289,7 @@ def benchmark_composite(
                     } | configuration
                     tasks += [
                         diffmp.utils.Task(
-                            instance,
+                            instance_data,
                             tmp_config,
                             TIMELIMIT_DB_ASTAR,
                             TIMELIMIT_DB_CBS,
@@ -261,21 +297,24 @@ def benchmark_composite(
                         )
                         for _ in range(TRIALS)
                     ]
+    pbar_export.close()
     random.shuffle(tasks)
     pbar = tqdm(total=len(tasks))
-    executed_tasks: List[diffmp.utils.Task] = []
-    with mp.Pool(4, maxtasksperchild=10) as p:
-        for result in p.imap_unordered(diffmp.utils.execute_task, tasks):
-            executed_tasks.append(result)
-            # solutions += 1
-            # runtimes.append(result.runtime)
-            # costs.append(len(result.optimized_solution.actions)/10)
-            pbar.update()
+    # executed_tasks: List[diffmp.utils.Task] = []
+    executed_tasks = diffmp.utils.execute_tasks(tasks, 20, pbar=pbar)
+    # with mp.Pool(4, maxtasksperchild=10) as p:
+    #     for result in p.imap_unordered(diffmp.utils.execute_task, tasks):
+    #         executed_tasks.append(result)
+    #         # solutions += 1
+    #         # runtimes.append(result.runtime)
+    #         # costs.append(len(result.optimized_solution.actions)/10)
+    #         pbar.update()
     pbar.close()
     results = defaultdict(list)
     for task in executed_tasks:
-        path = task.config["mp_path"]
-        results["instance"].append(task.instance.name)
+        path = task.config["mp_path"][0]
+        assert isinstance(task.instance, dict)
+        results["instance"].append(task.instance["name"])
         results["n_mp"].append(task.config["num_primitives_0"])
         results["delta_0"].append(task.config["delta_0"])
         if "new_format_motions" in path:

@@ -32,7 +32,7 @@ def sample(
     else:
         conditioning = None
     if model.config.discretize is not None:
-        tensor = torch.Tensor(
+        tensor = torch.tensor(
             instance.environment.discretize(model.config.discretize), device=du.DEVICE
         )
         discretize = tensor.reshape(tensor.shape[0], tensor.shape[0]).repeat(
