@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from .schedules import NoiseSchedule
 from .dataset import DiffusionDataset
 from .normalize import to_tanh_space, from_tanh_space
+from .timestep import timestep_embedding
 
 
 @dataclass
@@ -46,6 +47,7 @@ class DiscretizeConfig:
 class CompositeConfig:
     dynamics: str
     models: list[Model]
+    n_robots: int
     optuna: Optional[OptunaReporter] = None
     allocation: Optional[dict[int, int]] = None
 
@@ -58,6 +60,8 @@ class CompositeConfig:
     def from_dict(cls, data: dict, load_if_exists: bool = True) -> CompositeConfig:
         n_robots = data["n_robots"]
         dynamics = dy.get_dynamics(data["dynamics"], 1, n_robots).name
+        n_robots = data["n_robots"]
+        assert isinstance(n_robots, int)
         models: list[Model] = []
         models_path = Path("data/models")
         for model_name in data["models"]:
@@ -74,10 +78,16 @@ class CompositeConfig:
             assert model.config.dynamics.name == dynamics
             models.append(model)
         assert len(models) == len(set(m.dynamics.timesteps for m in models))
+        assert all([n_robots == m.config.n_robots for m in models])
         if data.get("allocation"):
             assert isinstance(data["allocation"], dict)
-            return cls(dynamics=dynamics, models=models, allocation=data["allocation"])
-        return cls(dynamics=dynamics, models=models)
+            return cls(
+                dynamics=dynamics,
+                models=models,
+                n_robots=n_robots,
+                allocation=data["allocation"],
+            )
+        return cls(dynamics=dynamics, models=models, n_robots=n_robots)
 
 
 @dataclass
@@ -95,6 +105,7 @@ class Config:
     denoising_steps: int
     batch_size: int
     lr: float
+    time_embedding_size: int
     noise_schedule: NoiseSchedule
     dataset_size: int
     reporters: list[du.Reporter]
@@ -105,6 +116,8 @@ class Config:
     discretize: Optional[DiscretizeConfig] = None
     robot_embedding: bool = False
     classify_actions: bool = False
+    norm_mean: dict[str, torch.Tensor] = field(default_factory=dict)
+    norm_std: dict[str, torch.Tensor] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         config = {
@@ -119,17 +132,93 @@ class Config:
             "loss_fn": self.loss_fn.name,
             "dataset": str(self.dataset),
             "denoising_steps": self.denoising_steps,
+            "time_embedding_size": self.time_embedding_size,
             "batch_size": self.batch_size,
             "lr": self.lr,
             "noise_schedule": self.noise_schedule.name,
+            "classify_actions": self.classify_actions,
+            "n_robots": self.n_robots,
             "dataset_size": self.dataset_size,
             "reporters": [du.Reporters(type(r)).name for r in self.reporters],
             "validation_split": self.validation_split,
+            # "normalize": {
+            #     "mean": {k: t.tolist() for k, t in self.norm_mean.items()},
+            #     "std": {k: t.tolist() for k, t in self.norm_std.items()},
+            # },
         }
         if isinstance(self.discretize, DiscretizeConfig):
             config["discretize"] = self.discretize.to_dict()
 
         return config
+
+    def denormalize_output(self, output: torch.Tensor):
+        reg_mean = self.norm_mean.get("regular")
+        reg_std = self.norm_std.get("regular")
+        assert isinstance(reg_mean, torch.Tensor)
+        assert isinstance(reg_std, torch.Tensor)
+
+        output = (output * reg_std) + reg_mean
+        return output
+
+    def normalize_regular(self, data: torch.Tensor) -> torch.Tensor:
+        reg_mean = self.norm_mean.get("regular")
+        reg_std = self.norm_std.get("regular")
+        assert isinstance(reg_mean, torch.Tensor)
+        assert isinstance(reg_std, torch.Tensor)
+        data = (data - reg_mean) / reg_std
+        return data
+
+    def normalize_conditioning(self, data: torch.Tensor) -> torch.Tensor:
+        cond_mean = self.norm_mean.get("conditioning")
+        cond_std = self.norm_std.get("conditioning")
+        assert isinstance(cond_mean, torch.Tensor)
+        assert isinstance(cond_std, torch.Tensor)
+        data = (data - cond_mean) / cond_std
+        return data
+
+    def normalize_discretized(self, data: torch.Tensor) -> torch.Tensor:
+        cond_mean = self.norm_mean.get("discretized")
+        cond_std = self.norm_std.get("discretized")
+        assert isinstance(cond_mean, torch.Tensor)
+        assert isinstance(cond_std, torch.Tensor)
+        data = (data - cond_mean) / cond_std
+        return data
+
+    def set_norm_vals(self, dataset: DiffusionDataset):
+        if self.norm_mean or self.norm_std:
+            raise Exception("Norm vals already set")
+        if dataset.actions_classes is not None:
+            # Exclude values that are determined by the actions classes
+            mask = torch.ones_like(dataset.regular).to(torch.bool)
+            mask[:, : dataset.actions_classes.shape[1]] = dataset.actions_classes == 1
+            input_nans = torch.where(mask, dataset.regular, torch.nan)
+            reg_mean = torch.nanmean(input_nans, dim=0)
+            reg_std = torch.sqrt(
+                torch.nanmean(
+                    torch.pow(
+                        input_nans - torch.nanmean(input_nans, dim=0).unsqueeze(0), 2
+                    ),
+                    dim=0,
+                ),
+            )
+        else:
+            reg_mean = torch.mean(dataset.regular, dim=0)
+            reg_std = torch.std(dataset.regular, dim=0)
+
+        self.norm_mean["regular"] = reg_mean
+        self.norm_std["regular"] = reg_std
+
+        if dataset.conditioning is not None:
+            cond_mean = torch.mean(dataset.conditioning, dim=0)
+            cond_std = torch.std(dataset.conditioning, dim=0)
+            self.norm_mean["conditioning"] = cond_mean
+            self.norm_std["conditioning"] = cond_std
+
+        if dataset.discretized is not None:
+            dis_mean = torch.mean(dataset.discretized)
+            dis_std = torch.std(dataset.discretized)
+            self.norm_mean["discretized"] = dis_mean
+            self.norm_std["discretized"] = dis_std
 
     def to_yaml(self, path: Path) -> None:
         with open(path, "w") as file:
@@ -153,7 +242,6 @@ class Config:
             instance.results = []
             assert isinstance(instance.baseline, pb.Baseline)
 
-        print(n_robots)
         data["dynamics"] = dy.get_dynamics(
             data["dynamics"], data["timesteps"], n_robots
         )
@@ -224,7 +312,8 @@ class Model(Module):
         self.out_size = sum([len(param.cols) for param in self.regular])
         self.noise_size = self.out_size
         self.cond_size = sum([len(param.cols) for param in self.conditioning])
-        self.in_size = self.out_size + self.cond_size + 1
+        self.timestep_emb_size = 32
+        self.in_size = self.out_size + self.cond_size + self.timestep_emb_size
 
         self.s_hidden = config.s_hidden
         self.n_hidden = config.n_hidden
@@ -287,83 +376,6 @@ class Model(Module):
         self.norm_mean = {}
         self.norm_std = {}
 
-    def denormalize_output(self, output: torch.Tensor):
-        reg_mean = self.norm_mean.get("regular")
-        reg_std = self.norm_std.get("regular")
-        assert isinstance(reg_mean, torch.Tensor)
-        assert isinstance(reg_std, torch.Tensor)
-
-        output = (output * reg_std) + reg_mean
-        # curr = 0
-        # for param in self.dynamics.parameter_set.iter_regular():
-        #     val_min = param.val_min
-        #     val_max = param.val_max
-        #     n_cols = len(param.cols)
-        #     if val_min is not None and val_max is not None:
-        #         assert len(val_min) == len(val_max) and len(val_min) == n_cols
-        #         for i in range(len(val_min)):
-        #             output[:, curr + i] = from_tanh_space(
-        #                 output[:, curr + i], val_min[i], val_max[i]
-        #             )
-        #     curr += n_cols
-        return output
-
-    def normalize_regular(self, data: torch.Tensor) -> torch.Tensor:
-        # curr = 0
-        # for param in self.dynamics.parameter_set.iter_regular():
-        #     val_min = param.val_min
-        #     val_max = param.val_max
-        #     n_cols = len(param.cols)
-        # if val_min is not None and val_max is not None:
-        #     assert len(val_min) == len(val_max) and len(val_min) == n_cols
-        #     for i in range(len(val_min)):
-        #         dataset.regular[:, curr + i] = to_tanh_space(
-        #             dataset.regular[:, curr + i], val_min[i], val_max[i]
-        #         )
-        # curr += n_cols
-        reg_mean = self.norm_mean.get("regular")
-        reg_std = self.norm_std.get("regular")
-        assert isinstance(reg_mean, torch.Tensor)
-        assert isinstance(reg_std, torch.Tensor)
-        data = (data - reg_mean) / reg_std
-        return data
-
-    def normalize_conditioning(self, data: torch.Tensor) -> torch.Tensor:
-        cond_mean = self.norm_mean.get("conditioning")
-        cond_std = self.norm_std.get("conditioning")
-        assert isinstance(cond_mean, torch.Tensor)
-        assert isinstance(cond_std, torch.Tensor)
-        data = (data - cond_mean) / cond_std
-        return data
-
-    def set_norm_vals(self, dataset: DiffusionDataset):
-        if self.norm_mean or self.norm_std:
-            raise Exception("Norm vals already set")
-        if dataset.actions_classes is not None:
-            mask = torch.ones_like(dataset.regular).to(torch.bool)
-            mask[:, : dataset.actions_classes.shape[1]] = dataset.actions_classes == 1
-            input_nans = torch.where(mask, dataset.regular, torch.nan)
-            reg_mean = torch.nanmean(input_nans, dim=0)
-            reg_std = torch.sqrt(
-                torch.nanmean(
-                    torch.pow(
-                        input_nans - torch.nanmean(input_nans, dim=0).unsqueeze(0), 2
-                    ),
-                    dim=0,
-                ),
-            )
-        else:
-            reg_mean = torch.mean(dataset.regular, dim=0)
-            reg_std = torch.std(dataset.regular, dim=0)
-
-        if dataset.conditioning is not None:
-            cond_mean = torch.mean(dataset.conditioning, dim=0)
-            cond_std = torch.std(dataset.conditioning, dim=0)
-            self.norm_mean["conditioning"] = cond_mean
-            self.norm_std["conditioning"] = cond_std
-        self.norm_mean["regular"] = reg_mean
-        self.norm_std["regular"] = reg_std
-
     def save(self):
         if isinstance(self.path, Path):
             config_path = self.path.parent / (self.path.name + ".yaml")
@@ -386,6 +398,7 @@ class Model(Module):
     def forward(
         self,
         x: Tensor,
+        t: torch.Tensor,
         x_cat: Optional[torch.Tensor] = None,
         env_grid: Optional[torch.Tensor] = None,
         scale: Optional[torch.Tensor] = None,
@@ -409,6 +422,11 @@ class Model(Module):
             assert x_cat is not None
             cat_emb = self.cat_embedding(x_cat).reshape(x.shape[0], -1)
             x = torch.concat([x, cat_emb], dim=-1)
+
+        t_emb = timestep_embedding(t, dim=self.timestep_emb_size).reshape(
+            x.shape[0], -1
+        )
+        x = torch.concat([x, t_emb], dim=-1)
 
         for i in range(len(self.linears)):
             layer = self.linears[i]

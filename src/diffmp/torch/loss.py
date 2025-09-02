@@ -1,6 +1,7 @@
 from geomloss import SamplesLoss
 import torch
-from typing import TYPE_CHECKING
+from tqdm import tqdm
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from typing import Dict
@@ -32,6 +33,7 @@ def compute_test_loss(
     gamma=1.0,
     epsilon=1e-6,
     debug: bool = False,
+    pbar: Optional[tqdm] = None,
 ):
     """
     Computes a test score comparing performance against a baseline.
@@ -52,16 +54,25 @@ def compute_test_loss(
 
     if success_rate == 0:
         if debug:
-            print(f"Success: {0:.4f} - Duration: {0:.4f} - Cost: {0:.4f}")
+            put_str = f"Success: {0:.4f} - Duration: {0:.4f} - Cost: {0:.4f}"
+            if pbar is None:
+                print(put_str)
+            else:
+                pbar.write(put_str)
         return 0.0
 
-    success_term = ((success_rate + epsilon) / (baseline_success + epsilon)) ** alpha
+    success_term_lt = (success_rate + epsilon) / (baseline_success + epsilon)
+    success_term = (
+        success_term_lt**alpha if success_rate < baseline_success else success_term_lt
+    )  # Weigh success term heavier if lower than baseline, less heavy if larger/equal
     duration_term = (baseline_duration / duration) ** beta if duration > 0 else 1.0
     cost_term = (baseline_cost / cost) ** gamma if cost > 0 else 1.0
     if debug:
-        print(
-            f"Success: {success_term:.4f} - Duration: {duration_term:.4f} - Cost: {cost_term:.4f}"
-        )
+        put_str = f"Success: {success_term:.4f} - Duration: {duration_term:.4f} - Cost: {cost_term:.4f}"
+        if pbar is None:
+            print(put_str)
+        else:
+            pbar.write(put_str)
 
     test_score = success_term * duration_term * cost_term
     return test_score

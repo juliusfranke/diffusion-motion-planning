@@ -96,9 +96,22 @@ class Robot:
         if start_free is None:
             return None
 
-        goal_free = env.random_free(dynamics, other_robots)
-        if goal_free is None:
-            return None
+        env_min = min(env.size[:2])
+        while True:
+            goal_free = env.random_free(dynamics, other_robots)
+            if goal_free is None:
+                continue
+            eucl_dist = np.sqrt(
+                (start_free[0] - goal_free[0]) ** 2
+                + (start_free[1] - goal_free[1]) ** 2
+            )
+            if eucl_dist < env_min / 2:
+                continue
+            else:
+                # breakpoint()
+                break
+            # if goal_free is None:
+            #     return None
 
         # print(start_free)
         # print(goal_free)

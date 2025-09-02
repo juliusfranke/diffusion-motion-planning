@@ -28,7 +28,7 @@ def sample(
         conditioning = du.condition_for_sampling(
             model.config, n_samples, instance, robot_idx
         )
-        conditioning = model.normalize_conditioning(conditioning)
+        conditioning = model.config.normalize_conditioning(conditioning)
     else:
         conditioning = None
     if model.config.discretize is not None:
@@ -81,9 +81,11 @@ def sample(
         )
 
         if isinstance(conditioning, torch.Tensor):
-            model_input = torch.concat([x_t_cont, conditioning, ts], dim=-1)
+            # model_input = torch.concat([x_t_cont, conditioning, ts], dim=-1)
+            model_input = torch.concat([x_t_cont, conditioning], dim=-1)
         else:
-            model_input = torch.concat([x_t_cont, ts], dim=-1)
+            # model_input = torch.concat([x_t_cont, ts], dim=-1)
+            model_input = x_t_cont
 
         if discretize is not None:
             scale = (torch.ones(n_samples, dtype=torch.int) * 0,)
@@ -97,6 +99,7 @@ def sample(
         # breakpoint()
         eps_pred, cat_logits = model(
             model_input,
+            ts,
             x_t_cat,
             discretize,
             scale,
@@ -126,11 +129,12 @@ def sample(
             probs_post = torch.exp(log_p_post)
             x_t_cat = torch.distributions.Categorical(probs=probs_post).sample()
     x_final = x_t_cont.clone()
-    x_final = model.denormalize_output(x_final)
+    x_final = model.config.denormalize_output(x_final)
     x_cat = x_t_cat.clone()
     if model.config.classify_actions:
         x_final[:, : x_cat.shape[1]][x_cat == 0] = -0.5
         x_final[:, : x_cat.shape[1]][x_cat == 2] = 0.5
+    # breakpoint()
     return x_final
 
 

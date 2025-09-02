@@ -143,6 +143,8 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     [dataset.drop(columns=p.cols, inplace=True) for p in parameter_set.required]
 
     dataset.drop_duplicates(inplace=True)
+    # dataset = dataset[dataset.misc.rel_c > dataset.misc.rel_c.mean()]
+    # dataset = dataset[dataset.misc.rel_c > 0.95]
     if dataset.shape[0] > config.dataset_size:
         weights = np.ones(dataset.shape[0])
         for weight_col1, layer2 in config.weights.items():
@@ -156,7 +158,7 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     # print(f"{reg_cols=}")
     if config.classify_actions:
         action_cols = [col for col in regular.columns if col[0] == "actions"]
-        print(f"{pd.MultiIndex.from_tuples(cond_cols)=}")
+        # print(f"{pd.MultiIndex.from_tuples(cond_cols)=}")
         actions_classes = torch.Tensor(
             classify_actions(regular, action_cols, -0.5, 0.5).to_numpy(),
             device=diffmp.utils.DEVICE,
@@ -177,7 +179,6 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
         )
     else:
         row_to_id = None
-
     return diffmp.torch.DiffusionDataset(
         regular=regular,
         conditioning=conditioning,
@@ -325,7 +326,8 @@ def condition_for_sampling(
             case "rel_p":
                 data[("misc", "rel_p")] = np.linspace(0, 1, n_samples)
             case "delta_0":
-                data[("misc", "delta_0")] = np.ones(n_samples) * 0.5
+                # data[("misc", "delta_0")] = np.ones(n_samples) * 0.5
+                data[("misc", "delta_0")] = np.random.random(n_samples) * 0.5
             case _:
                 raise NotImplementedError(
                     f"{condition.name} is not implemented as conditioning"
@@ -333,8 +335,6 @@ def condition_for_sampling(
 
     df = pd.DataFrame(data)
     # print(df.columns)
-    # breakpoint()
-
     return torch.tensor(df.to_numpy(), device=diffmp.utils.DEVICE)
 
 

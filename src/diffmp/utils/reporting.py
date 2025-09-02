@@ -97,7 +97,9 @@ class TQDMReporter(Reporter):
     def report_test(self, test_loss: float, step: int, **kwargs) -> None:
         super().report_test(test_loss, step, **kwargs)
         if self.pbar is not None:
-            self.pbar.write(f"Epoch {step+1}: {test_loss:.4f}")
+            self.pbar.write(
+                f"Epoch {step+1:04d}: Test: {test_loss:.4f} - Train: {self.postfix['train']:.4f} - Val: {self.postfix['val']:.4f}"
+            )
         return None
 
     def close(self) -> None:
@@ -208,11 +210,10 @@ class OptunaReporter(Reporter):
     def report_test(self, test_loss: float, step: int, **kwargs) -> None:
         assert isinstance(self.trial, optuna.Trial)
 
+        self.trial.report(test_loss, step)
+        self.best_test = max(test_loss, self.best_test)
         self.reported += 1
         if self.reported > self.reported_min:
-            self.trial.report(test_loss, step)
-            self.best_test = max(test_loss, self.best_test)
-
             if self.trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
         return super().report_test(test_loss, step, **kwargs)

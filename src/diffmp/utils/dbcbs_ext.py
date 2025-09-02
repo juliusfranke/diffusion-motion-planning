@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import time
+import os
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional, Callable
@@ -65,6 +67,7 @@ class Solution:
             Trajectory.from_db_cbs(traj)
             for traj in db_cbs_solution.optimized.trajectories
         ]
+
         runtime = db_cbs_solution.runtime
         delta = db_cbs_solution.delta
 
@@ -97,13 +100,15 @@ def execute_task(task: Task) -> Task:
     else:
         instance_data = task.instance.to_dict()
     try:
-        results = dbcbs_py.db_ecbs(
+        # results = dbcbs_py.db_ecbs(
+        results = dbcbs_py.db_cbs(
             instance_data,
             tmp1.name,
             tmp2.name,
             task.config,
             task.timelimit_db_astar,
             task.timelimit_db_cbs,
+            False,
         )
     except IndexError:
         results = []
@@ -152,6 +157,12 @@ def execute_tasks(
         p.start()
         return p
 
+    def hard_kill(p):
+        try:
+            os.kill(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
     while next_task < len(tasks) or active:
         # Start new tasks if we have slots
         while len(active) < max_workers and next_task < len(tasks):
@@ -168,7 +179,8 @@ def execute_tasks(
                 continue
             elif time.time() - start_time > timeout:
                 # Timeout: kill
-                p.terminate()
+                # p.terminate()
+                hard_kill(p)
                 p.join()
                 statuses[idx] = "timeout"
                 failures += 1
@@ -204,9 +216,26 @@ def execute_tasks(
 
 
 def out_to_mps(
-    actions: npt.NDArray, states: npt.NDArray, fmt: Literal["yaml", "msgpack"]
+    actions: npt.NDArray,
+    states: npt.NDArray,
+    fmt: Literal["yaml", "msgpack"],
+    split_random: bool = False,
 ):
     length = actions.shape[1]
+    # random_idx = np.random.randint(5, actions.shape[0] + 1, size=length)
+    random_lengths = np.random.normal(loc=12, scale=5, size=length).astype(int)
+    random_lengths = np.clip(random_lengths, a_min=5, a_max=actions.shape[0])
+    random_starts = np.array(
+        [
+            (
+                np.random.randint(0, actions.shape[0] - random_length)
+                if random_length < actions.shape[0]
+                else 0
+            )
+            for random_length in random_lengths
+        ]
+    )
+    random_ends = random_starts + random_lengths
     if fmt == "yaml":
         mps = [
             {
@@ -218,24 +247,30 @@ def out_to_mps(
             for i in range(length)
         ]
     elif fmt == "msgpack":
-        mps = {
-            "data": [
-                {
-                    "actions": actions[:, i, :].tolist(),
-                    "states": states[:, i, :].tolist(),
-                }
-                for i in range(length)
-            ]
-        }
-    # mps = []
-    # for i in range(length):
-    #     mp = {
-    #         "start": states[0, i, :].tolist(),
-    #         "goal": states[-1, i, :].tolist(),
-    #         "actions": actions[:, i, :].tolist(),
-    #         "states": states[:, i, :].tolist(),
-    #     }
-    #     mps.append(mp)
+        if split_random:
+            mps = {
+                "data": [
+                    {
+                        "actions": actions[
+                            random_starts[i] : random_ends[i], i, :
+                        ].tolist(),
+                        "states": states[
+                            random_starts[i] : random_ends[i] + 1, i, :
+                        ].tolist(),
+                    }
+                    for i in range(length)
+                ]
+            }
+        else:
+            mps = {
+                "data": [
+                    {
+                        "actions": actions[:, i, :].tolist(),
+                        "states": states[:, i, :].tolist(),
+                    }
+                    for i in range(length)
+                ]
+            }
     return mps
 
 
@@ -292,7 +327,9 @@ def export_composite(
     instance: diffmp.problems.Instance,
     out_path: Path,
     n_mp: int = 100,
+    robot_idx: int = 0,
 ) -> None:
+    fmt = "yaml" if out_path.suffix == ".yaml" else "msgpack"
     primitives = []
     distribution = composite_config.allocation
     if not isinstance(distribution, dict):
@@ -301,11 +338,25 @@ def export_composite(
         )
     for model in composite_config.models:
         n_mp_model = distribution[model.dynamics.timesteps]
-        out = diffmp.torch.sample(model, n_mp_model, instance).detach().cpu().numpy()
+        out = (
+            diffmp.torch.sample(model, n_mp_model, instance, robot_idx)
+            .detach()
+            .cpu()
+            .numpy()
+        )
         mps = model.dynamics.to_mp(out)
-        dbcbs_mps = out_to_mps(mps["actions"], mps["states"])
-        primitives.extend(dbcbs_mps)
+        dbcbs_mps = out_to_mps(mps["actions"], mps["states"], fmt)
+        if isinstance(dbcbs_mps, dict):
+            primitives.extend(dbcbs_mps["data"])
+        else:
+            primitives.extend(dbcbs_mps)
 
+    # breakpoint()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as file:
-        yaml.safe_dump(primitives, file, default_flow_style=None)
+    if fmt == "yaml":
+        with open(out_path, "w") as file:
+            yaml.safe_dump(primitives, file, default_flow_style=None)
+    else:
+        with open(out_path, "wb") as file:
+            packed = msgpack.packb({"data": primitives})
+            file.write(packed)  # type:ignore

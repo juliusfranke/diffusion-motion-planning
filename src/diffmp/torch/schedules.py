@@ -8,12 +8,23 @@ import numpy.typing as npt
 def cosine_noise_schedule(
     N: int,
 ) -> Tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    timesteps = np.linspace(0, 1, N)
-    alpha_bars = np.square(np.cos((timesteps * np.pi / 2), dtype=np.float64))
+    s = 0.008
+    steps = np.arange(N + 1)
+    f_t = (steps / N + s) / (1 + s) * np.pi / 2
+    alpha_bars = np.cos(f_t) ** 2
+    alpha_bars = alpha_bars / alpha_bars[0]  # normalize so alpha_bar_0 = 1
 
-    alphas = alpha_bars[1:] / alpha_bars[:-1]
-    betas = 1 - alphas
-    return alpha_bars, betas
+    # Compute per-step betas
+    betas = 1 - (alpha_bars[1:] / alpha_bars[:-1])
+    betas = np.clip(betas, a_min=1e-8, a_max=0.999)  # prevent extremes
+
+    return alpha_bars[1:], betas
+    # timesteps = np.linspace(0, 1, N)
+    # alpha_bars = np.square(np.cos((timesteps * np.pi / 2), dtype=np.float64))
+
+    # alphas = alpha_bars[1:] / alpha_bars[:-1]
+    # betas = 1 - alphas
+    # return alpha_bars, betas
 
 
 def sigmoid_noise_schedule(
