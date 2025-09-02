@@ -1,7 +1,7 @@
-{ 
+{
     "venv": "venv",
-    "venvPath": "."
-    "include":[
+    "venvPath": ".",
+    "include": [
         "../buildRelease"
     ]
 }
