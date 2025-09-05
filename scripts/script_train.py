@@ -40,14 +40,14 @@ if __name__ == "__main__":
     model_name = sys.argv[2]
     model_path = Path(f"data/models/{model_name}")
     epochs = 5000
-    diffmp.utils.DEVICE = "cpu"
+    # diffmp.utils.DEVICE = "cpu"
     if config_path.suffixes[0] == ".standard":
         config = diffmp.torch.Config.from_yaml(config_path)
         dynamics = config.dynamics.name
         model = diffmp.torch.Model(config)
         model.path = model_path
 
-        diffmp.torch.train(model, epochs, test_epoch=50)
+        diffmp.torch.train(model, epochs, test_epoch=4500)
     elif config_path.suffixes[0] == ".composite":
         composite_config = diffmp.torch.CompositeConfig.from_yaml(config_path)
         diffmp.torch.train_composite(composite_config, epochs)

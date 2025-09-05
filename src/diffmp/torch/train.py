@@ -11,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Subset
 from tqdm import tqdm
 
 import diffmp
@@ -384,9 +384,41 @@ def get_data_loader(model: Model) -> Tuple[DataLoader, DataLoader]:
         dataset.discretized = model.config.normalize_discretized(dataset.discretized)
 
     test_abs = int(len(dataset) * model.config.validation_split)
-    train_subset, val_subset = random_split(
-        dataset, [test_abs, len(dataset) - test_abs]
-    )
+    if dataset.row_to_env is None:
+        train_subset, val_subset = random_split(
+            dataset, [test_abs, len(dataset) - test_abs]
+        )
+    else:
+        unique, counts = np.unique(dataset.row_to_env, return_counts=True)
+        total = counts.sum()
+
+        # Sort by frequency (descending)
+        sorted_idx = np.argsort(-counts)
+        unique_sorted = unique[sorted_idx]
+        counts_sorted = counts[sorted_idx]
+
+        # Greedily accumulate until target reached
+        validation_env_idx = []
+        training_env_idx = []
+        cumulative = 0
+        for u, c in zip(unique_sorted, counts_sorted):
+            if cumulative / total >= (1 - model.config.validation_split):
+                training_env_idx.append(u)
+                continue
+            validation_env_idx.append(u)
+            cumulative += c
+
+        coverage = cumulative / total
+        training_idx: list[int] = np.where(
+            np.isin(dataset.row_to_env, training_env_idx)
+        )[0].tolist()
+        validation_idx: list[int] = np.where(
+            np.isin(dataset.row_to_env, validation_env_idx)
+        )[0].tolist()
+
+        train_subset = Subset(dataset, training_idx)
+
+        val_subset = Subset(dataset, validation_idx)
 
     training_loader = DataLoader(
         train_subset, batch_size=model.config.batch_size, shuffle=True

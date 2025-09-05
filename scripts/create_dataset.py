@@ -4,11 +4,10 @@ import multiprocessing as mp
 from pathlib import Path
 import sys
 import random
+from typing import Literal
 
-import dbcbs_py
 import h5py
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 from tqdm import tqdm
 import yaml
@@ -16,7 +15,12 @@ import yaml
 import diffmp
 
 
-def split_solution(task: diffmp.utils.Task, lengths: list[int], robot_idx: int):
+def split_solution(
+    task: diffmp.utils.Task,
+    lengths: list[int],
+    robot_idx: int,
+    stride: int | Literal["L/2"] = "L/2",
+):
     assert isinstance(task.instance, diffmp.problems.Instance)
     dynamics = task.instance.robots[robot_idx].dynamics
     primitives = {
@@ -38,32 +42,55 @@ def split_solution(task: diffmp.utils.Task, lengths: list[int], robot_idx: int):
             weights=[len_per / length for length in lengths],
             k=len_solution // min_len,
         )
+        for mp_len in lengths:
+            l_stride = mp_len // 2 if stride == "L/2" else stride
 
-        for mp_len in mp_lens:
-            if len_solution - i < mp_len:
-                if mp_len == min_len:
-                    primitives[mp_len]["actions"].append(
-                        optimized.actions[-mp_len:].flatten()
-                    )
-                    primitives[mp_len]["states"].append(
-                        optimized.states[-mp_len:].flatten()
-                    )
-                    primitives[mp_len]["cost"].append(cost)
-                    primitives[mp_len]["rel_l"].append(i / len_solution)
-                    primitives[mp_len]["delta"].append(delta)
-                    break
+            for start_idx in np.arange(0, len_solution - mp_len + 1, l_stride):
+                primitives[mp_len]["actions"].append(
+                    optimized.actions[start_idx : start_idx + mp_len].flatten()
+                )
+                primitives[mp_len]["states"].append(
+                    optimized.states[start_idx : start_idx + mp_len].flatten()
+                )
+                primitives[mp_len]["cost"].append(cost)
+                rel_l_temp[mp_len].append(start_idx / len_solution)
+                # primitives[mp_len]["rel_l"].append(start_idx / len_solution)
+                primitives[mp_len]["delta"].append(delta)
+            last_actions = optimized.actions[-mp_len:].flatten()
+            if all(last_actions == primitives[mp_len]["actions"][-1]):
                 continue
-            primitives[mp_len]["actions"].append(
-                optimized.actions[i : i + mp_len].flatten()
-            )
-            primitives[mp_len]["states"].append(
-                optimized.states[i : i + mp_len].flatten()
-            )
-            rel_l_temp[mp_len].append(i / len_solution)
-            # primitives[mp_len]["rel_l"].append(i / len_solution)
+            primitives[mp_len]["actions"].append(optimized.actions[-mp_len:].flatten())
+            primitives[mp_len]["states"].append(optimized.states[-mp_len:].flatten())
             primitives[mp_len]["cost"].append(cost)
+            # primitives[mp_len]["rel_l"].append((len_solution - mp_len) / len_solution)
+            rel_l_temp[mp_len].append((len_solution - mp_len) / len_solution)
             primitives[mp_len]["delta"].append(delta)
-            i += mp_len
+
+        # for mp_len in mp_lens:
+        #     if len_solution - i < mp_len:
+        #         if mp_len == min_len:
+        #             primitives[mp_len]["actions"].append(
+        #                 optimized.actions[-mp_len:].flatten()
+        #             )
+        #             primitives[mp_len]["states"].append(
+        #                 optimized.states[-mp_len:].flatten()
+        #             )
+        #             primitives[mp_len]["cost"].append(cost)
+        #             primitives[mp_len]["rel_l"].append(i / len_solution)
+        #             primitives[mp_len]["delta"].append(delta)
+        #             break
+        #         continue
+        #     primitives[mp_len]["actions"].append(
+        #         optimized.actions[i : i + mp_len].flatten()
+        #     )
+        #     primitives[mp_len]["states"].append(
+        #         optimized.states[i : i + mp_len].flatten()
+        #     )
+        #     rel_l_temp[mp_len].append(i / len_solution)
+        #     # primitives[mp_len]["rel_l"].append(i / len_solution)
+        #     primitives[mp_len]["cost"].append(cost)
+        #     primitives[mp_len]["delta"].append(delta)
+        #     i += mp_len
         max_rel_l = np.max(
             [np.max(np.array(rel_l_temp[length])) for length in rel_l_temp.keys()]
         )
@@ -186,15 +213,15 @@ def tasks_to_mp(tasks: list[diffmp.utils.Task], lengths: list[int], robot_idx: i
 def main():
     trials = int(sys.argv[1])
     # trials = 1000
-    timelimit_db_astar = 10000
-    timelimit_db_cbs = 10000
+    timelimit_db_astar = 5000
+    timelimit_db_cbs = 5000
     lengths = [5, 10, 15, 20]
     # lengths = [10]
     n_random = 100
     dynamics = "unicycle1_v0"
-    n_robots = 2
-    p_min = 0.3
-    p_max = 0.5
+    n_robots = 1
+    p_min = 0.1
+    p_max = 0.6
     # dynamics = ["unicycle1_v0", "unicycle1_v0"]
     # dynamics = "unicycle2_v0"
     # dynamics = "car1_v0"
@@ -227,8 +254,8 @@ def main():
     pbar_0 = tqdm(total=n_random)
     for _ in range(n_random):
         instance = diffmp.problems.Instance.random(
-            random.randint(5, 10),
-            random.randint(5, 10),
+            random.randint(10, 10),
+            random.randint(10, 10),
             # 5,
             # 5,
             random.random() * (p_max - p_min) + p_min,

@@ -134,14 +134,11 @@ def main():
         pbar_1 = tqdm(total=trials, leave=False)
         tasks = []
         instance = pb.Instance.random(
-            10,
-            10,
-            # 0.6,
-            # random.random() * (p_max - p_min) + p_min,
-            0.7,
-            # 0.2,
-            n_robots * [dynamics],
-            pb.Dim.TWO_D,
+            min_size=10,
+            max_size=10,
+            p_obstacles=random.random() * (p_max - p_min) + p_min,
+            robot_types=n_robots * [dynamics],
+            dim=pb.Dim.TWO_D,
         )
         tasks += [
             du.Task(

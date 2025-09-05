@@ -17,6 +17,8 @@ import diffmp.torch as to
 from .config import ParameterSet
 from .h5_helpers import get_columns, get_array, get_string_array
 
+# import matplotlib.pyplot as plt
+
 if TYPE_CHECKING:
     from diffmp.torch import Config
 
@@ -69,6 +71,8 @@ def load_from_instances(
                 case "theta_g":
                     robot_idx = int(column[0][6:])
                     data[column].append(instance.robots[robot_idx].goal[2])
+                case "p_obstacles":
+                    data[column].append(instance.environment.p_obstacles)
     data[("env", "idx")] = [i for i in range(len(instances))]
     df = pd.DataFrame(data)
     return df
@@ -79,12 +83,33 @@ def discretize_instances(
 ) -> torch.Tensor:
     dim = instances[0].environment.dim
     n = discretize_config.resolution
-    dis_tensor = torch.empty((len(instances), n, n))
+    start_channel = discretize_config.start_channel
+    goal_channel = discretize_config.goal_channel
+    n_robots = len(instances[0].robots)
+    channels = 1 + n_robots * (start_channel + goal_channel)
+    dis_tensor = torch.zeros((len(instances), channels, n, n))
     for i, instance in enumerate(instances):
-        dis = torch.Tensor(instance.environment.discretize(discretize_config))
+        scale = max(instance.environment.size) / n
+        dis = torch.tensor(instance.environment.discretize(discretize_config))
         if dim == pb.Dim.TWO_D:
             dis = dis.reshape(n, n)
-        dis_tensor[i] = dis
+        dis_tensor[i, 0] = dis
+        for j, robot in enumerate(instance.robots):
+            if start_channel:
+                sx, sy = (torch.tensor(robot.start[:2]) / scale).floor().long()
+                dis_tensor[i, 2 * j + 1, sy, sx] = 1
+            if goal_channel:
+                gx, gy = (torch.tensor(robot.goal[:2]) / scale).floor().long()
+                dis_tensor[i, 2 * j + 2, gy, gx] = 1
+        # fig, ax = plt.subplots(ncols=3)
+        # instance.plot(ax=ax[0])
+        # ax[1].matshow(dis)
+        # ax[1].yaxis.set_inverted(False)
+        # ax[2].matshow(dis_tensor[i, 1] + dis_tensor[i, 2])
+        # ax[2].yaxis.set_inverted(False)
+        # plt.show()
+
+        # breakpoint()
     return dis_tensor
 
 
@@ -159,7 +184,7 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     if config.classify_actions:
         action_cols = [col for col in regular.columns if col[0] == "actions"]
         # print(f"{pd.MultiIndex.from_tuples(cond_cols)=}")
-        actions_classes = torch.Tensor(
+        actions_classes = torch.tensor(
             classify_actions(regular, action_cols, -0.5, 0.5).to_numpy(),
             device=diffmp.utils.DEVICE,
         )
@@ -169,7 +194,7 @@ def load_dataset(config: Config, **kwargs) -> diffmp.torch.DiffusionDataset:
     conditioning = torch.tensor(conditioning.to_numpy(), device=diffmp.utils.DEVICE)
     if config.discretize is not None:
         dis = discretize_instances(instances, config.discretize)
-        dis = dis.reshape(dis.shape[0], 1, dis.shape[1], dis.shape[2])
+        # dis = dis.reshape(dis.shape[0], 1, dis.shape[1], dis.shape[2])
         dis.to(diffmp.utils.DEVICE)
     else:
         dis = None

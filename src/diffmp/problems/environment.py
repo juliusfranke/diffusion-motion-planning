@@ -242,7 +242,7 @@ class Environment:
                         raise RuntimeError(
                             "Unexpected SignedDistanceToMeshResult fields"
                         )
-                    sdf[i, j, k] = val
+                    sdf[j, i, k] = val
 
         return sdf
 

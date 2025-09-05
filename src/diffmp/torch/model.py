@@ -30,6 +30,8 @@ from .timestep import timestep_embedding
 class DiscretizeConfig:
     method: Literal["sd", "percent"]
     resolution: int
+    start_channel: bool
+    goal_channel: bool
 
     def scale(self, max_env_size: float) -> float:
         return max_env_size / self.resolution
@@ -37,10 +39,15 @@ class DiscretizeConfig:
     @classmethod
     def from_dict(cls, data: dict) -> DiscretizeConfig:
         assert data["method"] in ["sd", "percent"]
-        return cls(data["method"], data["resolution"])
+        return cls(**data)
 
     def to_dict(self) -> dict:
-        return {"method": self.method, "resolution": self.resolution}
+        return {
+            "method": self.method,
+            "resolution": self.resolution,
+            "start_channel": self.start_channel,
+            "goal_channel": self.goal_channel,
+        }
 
 
 @dataclass
@@ -358,9 +365,12 @@ class Model(Module):
             env_emb_size = res
             # self.in_size += env_emb_size + scale_emb_size
             self.in_size += env_emb_size
+            env_channels = 1 + config.n_robots * (
+                config.discretize.start_channel + config.discretize.goal_channel
+            )
             self.scale_embedding = ScaleEmbedding(1, scale_emb_size)
             if self.dynamics.dim == pb.Dim.TWO_D:
-                self.env_encoder = EnvEncoder2D(1, env_emb_size)
+                self.env_encoder = EnvEncoder2D(env_channels, env_emb_size)
             else:
                 self.env_encoder = EnvEncoder3D(1, env_emb_size)
 

@@ -33,7 +33,7 @@ class DiffusionDataset(torch.utils.data.Dataset):
         self.discretized = (
             discretized.to(diffmp.utils.DEVICE) if is_discretized else None
         )
-        self.row_to_env = row_to_env
+        self.row_to_env = row_to_env.astype(int) if row_to_env is not None else None
         self.row_to_id = row_to_id
         self.is_discretized = is_discretized
 
