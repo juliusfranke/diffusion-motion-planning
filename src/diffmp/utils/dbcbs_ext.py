@@ -90,7 +90,7 @@ class Task:
     solutions: list[Solution]
 
 
-def execute_task(task: Task) -> Task:
+def execute_task(task: Task, debug: bool = False) -> Task:
     tmp1 = tempfile.NamedTemporaryFile()
     tmp2 = tempfile.NamedTemporaryFile()
     if isinstance(task.instance, dict):
@@ -108,7 +108,7 @@ def execute_task(task: Task) -> Task:
             task.config,
             task.timelimit_db_astar,
             task.timelimit_db_cbs,
-            False,
+            debug,
         )
     except IndexError:
         results = []

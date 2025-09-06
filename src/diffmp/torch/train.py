@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import multiprocessing as mp
 import random
 import tempfile
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
@@ -20,6 +18,8 @@ import diffmp.utils as du
 
 from . import CompositeConfig, ExponentialMovingAverage, Model, compute_test_loss
 from .classifier import compute_log_posterior
+
+# from icecream import ic
 
 
 def run_epoch(
@@ -71,7 +71,8 @@ def run_epoch(
         out_gauss, logits_gauss = model(
             x_cont, t.unsqueeze(1), x0_cat, discretized, scale, robot_id
         )
-        # breakpoint()
+        # ic(epsilon.std())
+        # ic(out_gauss.std())
 
         if model.config.classify_actions:
             # Mask scalar loss to only include the values that are not at action limits
@@ -87,6 +88,7 @@ def run_epoch(
             eps_misc = epsilon[:, model.actions_dim :]
             scalar_loss = model.loss_fn(out_misc, eps_misc)
             loss_gaussian = scalar_masked_loss + scalar_loss
+            # loss_gaussian = model.loss_fn(out_gauss, epsilon)
             # Compute multimonial branch
             alpha_bar_t = torch.index_select(
                 torch.tensor(alpha_bars, device=du.DEVICE), 0, t
@@ -130,12 +132,18 @@ def run_epoch(
             q = torch.exp(log_q_post)
             loss_categorical = torch.sum(q * (log_q_post - log_p_post), dim=-1).mean()
 
+            # H = -(q * log_q_post).sum(dim=-1).mean().item()
+            # ic(H)
+            # if validate:
+            #     ic(loss_gaussian)
+            #     ic(loss_categorical)
             loss = (
                 loss_weights["gaussian"] * loss_gaussian
                 + loss_weights["categorical"] * loss_categorical
             )
         else:
             loss = model.loss_fn(out_gauss, epsilon)
+            # ic(loss)
 
         running_loss += float(loss.detach().cpu().numpy())
 
@@ -411,20 +419,24 @@ def get_data_loader(model: Model) -> Tuple[DataLoader, DataLoader]:
         coverage = cumulative / total
         training_idx: list[int] = np.where(
             np.isin(dataset.row_to_env, training_env_idx)
-        )[0].tolist()
+        )[0].tolist()  #  pyright:ignore
         validation_idx: list[int] = np.where(
             np.isin(dataset.row_to_env, validation_env_idx)
-        )[0].tolist()
+        )[0].tolist()  # pyright:ignore
 
         train_subset = Subset(dataset, training_idx)
 
         val_subset = Subset(dataset, validation_idx)
 
     training_loader = DataLoader(
-        train_subset, batch_size=model.config.batch_size, shuffle=True
+        train_subset,
+        batch_size=int(model.config.batch_size * model.config.validation_split),
+        shuffle=True,
     )
     validation_loader = DataLoader(
-        val_subset, batch_size=model.config.batch_size, shuffle=True
+        val_subset,
+        batch_size=int(model.config.batch_size * (1-model.config.validation_split)),
+        shuffle=True,
     )
     return (training_loader, validation_loader)
 

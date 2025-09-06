@@ -17,7 +17,7 @@ import diffmp.torch as to
 from .config import ParameterSet
 from .h5_helpers import get_columns, get_array, get_string_array
 
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
 if TYPE_CHECKING:
     from diffmp.torch import Config
@@ -97,7 +97,7 @@ def discretize_instances(
         for j, robot in enumerate(instance.robots):
             if start_channel:
                 sx, sy = (torch.tensor(robot.start[:2]) / scale).floor().long()
-                dis_tensor[i, 2 * j + 1, sy, sx] = 1
+                dis_tensor[i, 2 * j + 1, sy, sx] = -1
             if goal_channel:
                 gx, gy = (torch.tensor(robot.goal[:2]) / scale).floor().long()
                 dis_tensor[i, 2 * j + 2, gy, gx] = 1

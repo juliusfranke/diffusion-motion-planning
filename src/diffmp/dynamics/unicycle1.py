@@ -1,8 +1,16 @@
 from functools import partial
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
-from meshlib.mrmeshpy import AffineXf3f, Matrix3f, Vector3f, makeCube
+from meshlib.mrmeshpy import (
+    AffineXf3f,
+    Matrix3f,
+    SphereParams,
+    Vector3f,
+    makeCube,
+    makeSphere,
+)
 
 import diffmp.utils as du
 from .base import DynamicsBase
@@ -19,6 +27,7 @@ class UnicycleFirstOrder(DynamicsBase):
         timesteps: int,
         name: str,
         size: list[float],
+        shape: Literal["box", "sphere"],
         n_robots: int = 1,
         **kwargs,
     ) -> None:
@@ -100,6 +109,15 @@ class UnicycleFirstOrder(DynamicsBase):
             condition_parameters,
             condition=True,
         )
+        if shape == "box":
+            mesh = makeCube(
+                size=Vector3f(size[0], size[1], 1),
+                base=Vector3f(-size[0] / 2, -size[1] / 2, -0.5),
+            )
+        elif shape == "sphere":
+            mesh = makeSphere(SphereParams(0.4, 32))
+        else:
+            raise Exception(f"Unknown shape: {shape}")
 
         DynamicsBase.__init__(
             self,
@@ -114,10 +132,7 @@ class UnicycleFirstOrder(DynamicsBase):
             parameter_set=parameter_set,
             timesteps=timesteps,
             name=name,
-            mesh=makeCube(
-                size=Vector3f(size[0], size[1], 1),
-                base=Vector3f(-size[0] / 2, -size[1] / 2, -0.5),
-            ),
+            mesh=mesh,
             n_robots=n_robots,
         )
 

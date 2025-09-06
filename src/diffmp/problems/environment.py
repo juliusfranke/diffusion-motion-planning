@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 import random
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -206,57 +207,53 @@ class Environment:
             "obstacles": [o.to_dict() for o in self.obstacles],
         }
 
-    def discretize_sd(self, n: int) -> npt.NDArray[np.floating]:
+    def discretize_sd(self, pt: Vector3f, mp: MeshPart, d: float) -> float:
+        return findSignedDistance(pt, mp, loDistLimitSq=0).dist
+
+    def discretize_percent(self, pt: Vector3f, mp: MeshPart, d: float) -> float:
+        if self.discretize_sd(pt, mp, d) >= d:
+            return 0
+        size = Vector3f(d, d, 1)
+        base = pt - size
+        size *= 2
+        voxel = makeCube(size=size, base=base)
+        overlap = boolean(mp.mesh, voxel, BooleanOperation.Intersection)
+        return overlap.mesh.volume()
+
+    def discretize(self, dis_config: to.DiscretizeConfig) -> npt.NDArray[np.floating]:
+        n = dis_config.resolution
         Nx, Ny, Nz = n, n, n
         s_max = max(self.size)
         d = (s_max / n) / 2
         xs = np.linspace(0 + d, s_max - d, n)
         ys = np.linspace(0 + d, s_max - d, n)
         zs = np.linspace(0 + d, s_max - d, n)
-        # breakpoint()
         if self.dim == Dim.TWO_D:
             zs = np.array([0])
             Nz = 1
 
         X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
-
         blocked = boolean(
             self.blocked_mesh, self.boundary_mesh, BooleanOperation.Union
         ).mesh
         mp = MeshPart(blocked)
         sdf = np.empty((Nx, Ny, Nz), dtype=np.float32)
 
-        for i in range(Nx):
-            for j in range(Ny):
-                for k in range(Nz):
-                    pt = Vector3f(
-                        float(X[i, j, k]), float(Y[i, j, k]), float(Z[i, j, k])
-                    )
-                    sd = findSignedDistance(pt, mp)
-                    val = None
-                    if hasattr(sd, "signedDist"):
-                        val = float(sd.signedDist)  # pyright:ignore
-                    elif hasattr(sd, "dist"):
-                        val = float(sd.dist) * (-1 if getattr(sd, "sign", 1) < 0 else 1)
-                    else:
-                        raise RuntimeError(
-                            "Unexpected SignedDistanceToMeshResult fields"
-                        )
-                    sdf[j, i, k] = val
-
-        return sdf
-
-    def discretize_percent(self, n: int) -> npt.NDArray[np.floating]:
-        return np.array([])
-
-    def discretize(
-        self, discretize_config: to.DiscretizeConfig
-    ) -> npt.NDArray[np.floating]:
-        match discretize_config.method:
+        match dis_config.method:
             case "sd":
-                return self.discretize_sd(discretize_config.resolution)
+                func = self.discretize_sd
             case "percent":
-                return self.discretize_percent(discretize_config.resolution)
+                func = self.discretize_percent
+
+        func = partial(func, mp=mp, d=d)
+        for x in range(Nx):
+            for y in range(Ny):
+                for z in range(Nz):
+                    pt = Vector3f(
+                        float(X[x, y, z]), float(Y[x, y, z]), float(Z[x, y, z])
+                    )
+                    sdf[y, x, z] = func(pt)
+        return sdf
 
     def random_free(
         self,

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 import torch
 import yaml
 from torch import Tensor, float64, save
-from torch.nn import Embedding, Linear, Module, ModuleList, ReLU, Identity
+from torch.nn import Dropout, Embedding, Linear, Module, ModuleList, ReLU, Identity
 from torch.nn.init import kaiming_uniform_
 
 import diffmp.dynamics as dy
@@ -394,6 +394,7 @@ class Model(Module):
         # layers.append(Linear(self.s_hidden, self.out_size, dtype=float64))
 
         self.linears = ModuleList(layers)
+        self.dropout = Dropout(0.1)
         self.eps_head = Linear(self.s_hidden, self.out_size, dtype=float64)
 
         for layer in self.linears:
@@ -460,6 +461,7 @@ class Model(Module):
             layer = self.linears[i]
             x = ReLU()(layer(x))
 
+        # x = self.dropout(x)
         # out = self.linears[-1](x)
         bound_logits = None
         if self.cat_head is not None:
